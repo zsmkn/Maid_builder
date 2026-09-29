@@ -1,0 +1,27 @@
+// Pure Java module: schematic parsing, transforms and build planning.
+// Must never depend on net.minecraft.* or net.neoforged.*.
+plugins {
+    id 'java-library'
+}
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+
+base {
+    archivesName = "${mod_id}-core"
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    testImplementation platform("org.junit:junit-bom:${junit_version}")
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test', Test) {
+    useJUnitPlatform()
+    // Optional: point at a folder of real .litematic files for extra regression tests.
+    systemProperty 'maidbuilder.testSchematics', rootProject.file('local-schematics').absolutePath
+}

@@ -1,0 +1,63 @@
+### Reference sources (read-only, never committed) ###
+/refs/
+
+### Gradle ###
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/**/build/
+
+### Minecraft / NeoForge dev ###
+run/
+runs/
+run-data/
+!**/src/**/run/
+**/src/generated/**/.cache/
+repo/
+!**/src/**/repo/
+logs/
+crash-reports/
+
+### IntelliJ IDEA ###
+.idea/
+*.iws
+*.iml
+*.ipr
+out/
+!**/src/**/out/
+.run/
+
+### Eclipse ###
+.apt_generated
+.classpath
+.eclipse/
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+bin/
+!**/src/**/bin/
+
+### VS Code ###
+.vscode/
+
+### OS ###
+.DS_Store
+Thumbs.db
+desktop.ini
+
+### Local test data (real schematics used during development) ###
+/local-schematics/
+
+### Claude Code (instructions and local settings stay local) ###
+CLAUDE.md
+.claude/
+
+### Not needed to build the mod ###
+# original artwork; the texture used by the mod is in neoforge/src/main/resources
+/Asset/
+# example blueprint generated during development
+/sample_hut.litematic
+/screenshots/
+*.log
