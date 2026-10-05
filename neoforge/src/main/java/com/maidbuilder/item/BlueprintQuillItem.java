@@ -1,9 +1,10 @@
 package com.maidbuilder.item;
 
+import com.maidbuilder.common.capture.QuillActions;
 import com.maidbuilder.init.ModDataComponents;
 import net.minecraft.ChatFormatting;
-import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.InteractionResultHolder;
@@ -15,14 +16,17 @@ import net.minecraft.world.item.context.UseOnContext;
 import net.minecraft.world.level.Level;
 
 import java.util.List;
-import java.util.Optional;
 
 /**
  * Blueprint Quill: captures part of the world into a {@code .litematic} in the player's
- * {@code schematics/} folder (kept apart from the Blueprint Wand, which builds).
+ * {@code schematics/} folder (kept apart from the Blueprint Wand, which builds). The rules are in
+ * {@link QuillActions}:
  * <ul>
- *   <li>right-click a block: mark the first corner, then the second (a third click starts over)</li>
- *   <li>right-click air with both corners marked: name and save the blueprint (client screen)</li>
+ *   <li>right-click a building block: select the whole building (confirm by resizing or by
+ *       right-clicking the air; sneak + right-click picks corners by hand instead)</li>
+ *   <li>right-click terrain, or the air: mark a corner (the air: a few blocks ahead)</li>
+ *   <li>resize keys: move the face of the box pointed at; with one corner, the air distance</li>
+ *   <li>right-click the air with an area marked: name and save the blueprint (client screen)</li>
  *   <li>sneak + right-click: clear the selection</li>
  * </ul>
  */
@@ -31,15 +35,14 @@ public class BlueprintQuillItem extends Item {
         super(properties);
     }
 
+    /** Runs before the clicked block's own interaction, so doors and chests are marked, not opened. */
     @Override
-    public InteractionResult useOn(UseOnContext context) {
+    public InteractionResult onItemUseFirst(ItemStack stack, UseOnContext context) {
         Player player = context.getPlayer();
         if (player == null) return InteractionResult.PASS;
-        ItemStack stack = context.getItemInHand();
-        if (player.isSecondaryUseActive()) {
-            clear(player, stack);
-        } else if (!context.getLevel().isClientSide) {
-            mark(player, stack, context.getClickedPos());
+        if (player instanceof ServerPlayer serverPlayer) {
+            if (player.isSecondaryUseActive()) QuillActions.sneakClick(serverPlayer, stack);
+            else QuillActions.clickBlock(serverPlayer, stack, context.getClickedPos());
         }
         return InteractionResult.sidedSuccess(context.getLevel().isClientSide);
     }
@@ -47,41 +50,17 @@ public class BlueprintQuillItem extends Item {
     @Override
     public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
         ItemStack stack = player.getItemInHand(hand);
-        if (player.isSecondaryUseActive()) {
-            clear(player, stack);
-            return InteractionResultHolder.sidedSuccess(stack, level.isClientSide);
-        }
-        CaptureArea area = stack.get(ModDataComponents.CAPTURE_AREA.get());
-        if (area == null || !area.complete()) {
-            if (!level.isClientSide) player.displayClientMessage(Component.translatable("message.maidbuilder.quill.need_corners"), true);
-        } else if (!area.dimension().equals(level.dimension())) {
-            if (!level.isClientSide) player.displayClientMessage(Component.translatable("message.maidbuilder.quill.other_dimension"), true);
-        } else if (level.isClientSide) {
-            com.maidbuilder.client.ClientAccess.openCaptureScreen(area);
+        if (player instanceof ServerPlayer serverPlayer) {
+            if (player.isSecondaryUseActive()) QuillActions.sneakClick(serverPlayer, stack);
+            else QuillActions.clickAir(serverPlayer, stack);
+        } else if (!player.isSecondaryUseActive()) {
+            // A marked area (also one waiting for confirmation, which this click confirms) is saved.
+            CaptureArea area = stack.get(ModDataComponents.CAPTURE_AREA.get());
+            if (area != null && area.complete() && area.dimension().equals(level.dimension())) {
+                com.maidbuilder.client.ClientAccess.openCaptureScreen(area);
+            }
         }
         return InteractionResultHolder.sidedSuccess(stack, level.isClientSide);
-    }
-
-    private static void mark(Player player, ItemStack stack, BlockPos pos) {
-        CaptureArea area = stack.get(ModDataComponents.CAPTURE_AREA.get());
-        Level level = player.level();
-        CaptureArea updated;
-        if (area == null || area.complete() || !area.dimension().equals(level.dimension())) {
-            updated = new CaptureArea(level.dimension(), pos.immutable(), Optional.empty());
-            player.displayClientMessage(Component.translatable("message.maidbuilder.quill.first", pos.toShortString()), true);
-        } else {
-            updated = new CaptureArea(area.dimension(), area.first(), Optional.of(pos.immutable()));
-            BlockPos size = updated.size();
-            player.displayClientMessage(Component.translatable("message.maidbuilder.quill.second", pos.toShortString(),
-                    size.getX() + "x" + size.getY() + "x" + size.getZ()), true);
-        }
-        stack.set(ModDataComponents.CAPTURE_AREA.get(), updated);
-    }
-
-    private static void clear(Player player, ItemStack stack) {
-        if (player.level().isClientSide) return;
-        stack.remove(ModDataComponents.CAPTURE_AREA.get());
-        player.displayClientMessage(Component.translatable("message.maidbuilder.quill.cleared"), true);
     }
 
     @Override

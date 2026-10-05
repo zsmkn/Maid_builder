@@ -27,12 +27,13 @@ import java.util.UUID;
  *   <li>right-click a block: move the origin onto that face</li>
  *   <li>keys (R, M, arrows, PgUp/PgDn by default): rotate, mirror, nudge</li>
  *   <li>sneak + right-click: confirm, creating a build job (uploads the file if the server lacks it)</li>
+ *   <li>material list key (B by default): material list compared with the player's inventory (client only)</li>
  * </ul>
  * <p>Linked to a job:
  * <ul>
  *   <li>right-click a maid: she builds the job ({@link com.maidbuilder.common.maid.WandInteractHandler})</li>
  *   <li>right-click a container: add/remove it as a material container</li>
- *   <li>right-click elsewhere: progress summary; sneak + right-click: unlink to start a new placement</li>
+ *   <li>right-click elsewhere: material list screen; sneak + right-click: unlink to start a new placement</li>
  * </ul>
  */
 public class BlueprintWandItem extends Item {
@@ -51,7 +52,7 @@ public class BlueprintWandItem extends Item {
         if (player instanceof ServerPlayer serverPlayer) {
             if (linked(stack)) {
                 if (sneaking) WandActions.unlink(serverPlayer, stack);
-                else WandActions.showSummary(serverPlayer, stack);
+                else WandActions.showMaterials(serverPlayer, stack);
             } else if (sneaking) {
                 WandActions.confirm(serverPlayer, stack);
             }
@@ -84,7 +85,7 @@ public class BlueprintWandItem extends Item {
         if (player instanceof ServerPlayer serverPlayer) {
             if (linked(stack)) {
                 if (sneaking) WandActions.unlink(serverPlayer, stack);
-                else WandActions.showSummary(serverPlayer, stack);
+                else WandActions.showMaterials(serverPlayer, stack);
             } else if (sneaking) {
                 WandActions.confirm(serverPlayer, stack);
             } else if (stack.has(ModDataComponents.WAND_PLACEMENT.get())) {

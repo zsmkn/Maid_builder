@@ -2,6 +2,8 @@ package com.maidbuilder.network;
 
 import com.maidbuilder.MaidBuilder;
 import com.maidbuilder.common.capture.CaptureActions;
+import com.maidbuilder.common.capture.QuillActions;
+import com.maidbuilder.common.wand.MaterialReports;
 import com.maidbuilder.common.wand.UploadManager;
 import com.maidbuilder.common.wand.WandActions;
 import net.minecraft.server.level.ServerPlayer;
@@ -33,6 +35,12 @@ public final class ModNetwork {
             if (ctx.player() instanceof ServerPlayer player) UploadManager.receive(player, msg);
         });
 
+        registrar.playToServer(Payloads.RequestMaterialReport.TYPE, Payloads.RequestMaterialReport.CODEC, (msg, ctx) -> {
+            if (ctx.player() instanceof ServerPlayer player) MaterialReports.onRequest(player, msg.open());
+        });
+        registrar.playToServer(Payloads.QuillAdjust.TYPE, Payloads.QuillAdjust.CODEC, (msg, ctx) -> {
+            if (ctx.player() instanceof ServerPlayer player) QuillActions.adjust(player, msg.grow(), msg.amount());
+        });
         registrar.playToServer(Payloads.CaptureRequest.TYPE, Payloads.CaptureRequest.CODEC, (msg, ctx) -> {
             if (ctx.player() instanceof ServerPlayer player) CaptureActions.onRequest(player, msg);
         });
@@ -41,6 +49,8 @@ public final class ModNetwork {
                 (msg, ctx) -> com.maidbuilder.client.ClientPayloadHandler.onRequestUpload(msg));
         registrar.playToClient(Payloads.JobStatus.TYPE, Payloads.JobStatus.CODEC,
                 (msg, ctx) -> com.maidbuilder.client.ClientPayloadHandler.onJobStatus(msg));
+        registrar.playToClient(Payloads.MaterialReport.TYPE, Payloads.MaterialReport.CODEC,
+                (msg, ctx) -> com.maidbuilder.client.ClientPayloadHandler.onMaterialReport(msg));
         registrar.playToClient(Payloads.DownloadChunk.TYPE, Payloads.DownloadChunk.CODEC,
                 (msg, ctx) -> com.maidbuilder.client.ClientDownloads.onChunk(msg));
     }

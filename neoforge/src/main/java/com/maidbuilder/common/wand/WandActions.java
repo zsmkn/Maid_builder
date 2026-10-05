@@ -3,7 +3,6 @@ package com.maidbuilder.common.wand;
 import com.maidbuilder.MaidBuilder;
 import com.maidbuilder.common.MaterialContainers;
 import com.maidbuilder.common.SchematicStore;
-import com.maidbuilder.common.command.MaidBuilderCommand;
 import com.maidbuilder.common.job.BuildJob;
 import com.maidbuilder.common.job.BuildJobFactory;
 import com.maidbuilder.common.job.BuildJobManager;
@@ -165,12 +164,10 @@ public final class WandActions {
         PENDING_CANCEL.remove(player);
     }
 
-    public static void showSummary(ServerPlayer player, ItemStack wand) {
+    /** Opens the material screen of the linked job (the chat summary is {@code /maidbuilder job info}). */
+    public static void showMaterials(ServerPlayer player, ItemStack wand) {
         UUID jobId = wand.get(ModDataComponents.BUILD_JOB.get());
-        if (jobId == null) return;
-        BuildJobManager.loaded(player.server, jobId).ifPresentOrElse(
-                job -> MaidBuilderCommand.sendJobSummary(player.createCommandSourceStack(), job),
-                () -> player.sendSystemMessage(Component.translatable("message.maidbuilder.job.not_found", jobId.toString())));
+        if (jobId != null) MaterialReports.send(player, jobId, true);
     }
 
     /** Linked wand on a container: add it to / remove it from the job's material containers. */

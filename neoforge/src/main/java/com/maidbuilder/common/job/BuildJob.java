@@ -213,7 +213,8 @@ public final class BuildJob {
         this.cursor = 0;
     }
 
-    private static List<Requirement> requirementsFor(BlockStateData data, BlockState state) {
+    /** Items one placement of {@code state} consumes (the base item plus extras such as a potted plant). */
+    public static List<Requirement> requirementsFor(BlockStateData data, BlockState state) {
         if (state.isAir()) return List.of();
         Item base = state.getBlock().asItem();
         if (base == Items.AIR) {
@@ -372,6 +373,17 @@ public final class BuildJob {
         if (targets == null) return needed;
         for (int i = 0; i < targets.length; i++) {
             if (status[i] != PENDING) continue;
+            for (Requirement r : requirements.get(i)) needed.merge(r.item(), r.count(), Integer::sum);
+        }
+        return needed;
+    }
+
+    /** Items needed for the whole structure, built or not; steps that failed for good are left out. */
+    public Map<Item, Integer> totalMaterials() {
+        Map<Item, Integer> needed = new LinkedHashMap<>();
+        if (targets == null) return needed;
+        for (int i = 0; i < targets.length; i++) {
+            if (status[i] == FAILED) continue;
             for (Requirement r : requirements.get(i)) needed.merge(r.item(), r.count(), Integer::sum);
         }
         return needed;

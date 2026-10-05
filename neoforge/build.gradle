@@ -47,13 +47,21 @@ neoForge {
             programArguments.addAll '--quickPlaySingleplayer', 'selftest'
             systemProperty 'maidbuilder.selftest', 'true'
         }
+        // Same smoke test with shaders: its own game directory (runs/shaders) whose mods/ holds
+        // Iris + Sodium and whose shaderpacks/ + config/iris.properties pick the pack. Nothing is
+        // added to the mod's dependencies.
+        clientShaderTest {
+            client()
+            programArguments.addAll '--quickPlaySingleplayer', 'selftest'
+            systemProperty 'maidbuilder.selftest', 'true'
+        }
         // Runs all maidbuilder game tests, then exits (non-zero on failure).
         gameTestServer {
             type = 'gameTestServer'
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
         }
         configureEach {
-            gameDirectory = project.file('run')
+            gameDirectory = project.file(name == 'clientShaderTest' ? 'runs/shaders' : 'run')
             systemProperty 'forge.logging.markers', 'REGISTRIES'
             logLevel = org.slf4j.event.Level.DEBUG
         }

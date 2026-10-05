@@ -2,8 +2,8 @@ package com.maidbuilder.client;
 
 import com.maidbuilder.MaidBuilder;
 import com.maidbuilder.common.SchematicStore;
-import com.maidbuilder.core.schematic.LitematicReader;
 import com.maidbuilder.core.schematic.Schematic;
+import com.maidbuilder.core.schematic.SchematicReader;
 import net.minecraft.Util;
 
 import java.io.ByteArrayInputStream;
@@ -61,7 +61,7 @@ public final class ClientSchematics {
                 Path path = SchematicStore.resolveUserFile(file);
                 long modified = Files.getLastModifiedTime(path).toMillis();
                 byte[] bytes = Files.readAllBytes(path);
-                Schematic schematic = new LitematicReader(MAX_VOLUME, MAX_NBT_BYTES).read(new ByteArrayInputStream(bytes));
+                Schematic schematic = new SchematicReader(MAX_VOLUME, MAX_NBT_BYTES).read(new ByteArrayInputStream(bytes));
                 return new Loaded(file, sha1(bytes), bytes, schematic, modified);
             } catch (IOException e) {
                 MaidBuilder.LOGGER.warn("Cannot load schematic {}", file, e);

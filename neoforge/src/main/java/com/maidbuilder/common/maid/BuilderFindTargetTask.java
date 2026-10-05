@@ -67,24 +67,7 @@ public class BuilderFindTargetTask extends MaidCheckRateTask {
         }
 
         job.touchWorker(maid.getUUID(), gameTime);
-        Map<Item, Integer> inventory = MaidInventory.count(maid);
-        LivingEntity owner = maid.getOwner();
-        List<BlockPos> others = job.claimedByOthers(maid.getUUID());
-        boolean homeMode = maid.isHomeModeEnable();
-        double ownerRange = MaidBuilderConfig.OWNER_RANGE_WITHOUT_HOME.get();
-        AABB self = maid.getBoundingBox();
-
-        int index = job.findBest(level.getGameTime(), i -> {
-            BlockPos pos = job.pos(i);
-            if (!level.isLoaded(pos)) return false;
-            if (BlockPlacer.matches(level.getBlockState(pos), job.target(i))) {
-                job.setStatus(i, BuildJob.DONE);
-                return false;
-            }
-            if (!homeMode && (owner == null || !pos.closerToCenterThan(owner.position(), ownerRange))) return false;
-            if (self.intersects(new AABB(pos)) || job.isScaffold(pos) || session.isDeferred(i, gameTime)) return false;
-            return MaidInventory.has(inventory, job.requirements(i));
-        }, i -> score(maid, job.pos(i), others), MaidBuilderConfig.MAX_SCAN_PER_SEARCH.get());
+        int index = pickNext(level, maid, job, session, gameTime);
 
         if (index < 0 || !job.claim(index, maid.getUUID())) {
             setNextCheckTickCount(IDLE_RECHECK_TICKS);
@@ -109,6 +92,30 @@ public class BuilderFindTargetTask extends MaidCheckRateTask {
             job.release(maid.getUUID());
             setNextCheckTickCount(IDLE_RECHECK_TICKS);
         }
+    }
+
+    /**
+     * The step this maid should build next: the best one of the lowest unfinished layer that she has
+     * the materials for (-1 if none). Blocks found already in place are marked done on the way.
+     */
+    static int pickNext(ServerLevel level, EntityMaid maid, BuildJob job, BuilderSession session, long gameTime) {
+        Map<Item, Integer> inventory = MaidInventory.count(maid);
+        LivingEntity owner = maid.getOwner();
+        List<BlockPos> others = job.claimedByOthers(maid.getUUID());
+        boolean homeMode = maid.isHomeModeEnable();
+        double ownerRange = MaidBuilderConfig.OWNER_RANGE_WITHOUT_HOME.get();
+        AABB self = maid.getBoundingBox();
+        return job.findBest(level.getGameTime(), i -> {
+            BlockPos pos = job.pos(i);
+            if (!level.isLoaded(pos)) return false;
+            if (BlockPlacer.matches(level.getBlockState(pos), job.target(i))) {
+                job.setStatus(i, BuildJob.DONE);
+                return false;
+            }
+            if (!homeMode && (owner == null || !pos.closerToCenterThan(owner.position(), ownerRange))) return false;
+            if (self.intersects(new AABB(pos)) || job.isScaffold(pos) || session.isDeferred(i, gameTime)) return false;
+            return MaidInventory.has(inventory, job.requirements(i));
+        }, i -> score(maid, job.pos(i), others), MaidBuilderConfig.MAX_SCAN_PER_SEARCH.get());
     }
 
     /** Distance to walk, plus a penalty next to blocks other maids are working on so the team spreads out. */

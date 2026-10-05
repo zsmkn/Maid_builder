@@ -16,6 +16,7 @@ public final class ClientModEvents {
     @SubscribeEvent
     public static void registerKeys(RegisterKeyMappingsEvent event) {
         for (KeyMapping key : WandKeys.ALL) event.register(key);
+        event.register(WandKeys.MATERIALS);
     }
 
     @SubscribeEvent

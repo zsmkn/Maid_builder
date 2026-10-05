@@ -9,6 +9,8 @@ import com.maidbuilder.common.BlockPlacer;
 import com.maidbuilder.common.Convert;
 import com.maidbuilder.common.SchematicStore;
 import com.maidbuilder.common.StateResolver;
+import com.maidbuilder.common.capture.QuillActions;
+import com.maidbuilder.common.capture.StructureDetector;
 import com.maidbuilder.common.job.BuildJob;
 import com.maidbuilder.common.job.BuildJobManager;
 import com.maidbuilder.common.maid.BuilderMaidData;
@@ -23,11 +25,15 @@ import com.maidbuilder.core.schematic.Schematic;
 import com.maidbuilder.core.transform.Mirror;
 import com.maidbuilder.core.transform.Placement;
 import com.maidbuilder.core.transform.Rotation;
+import com.maidbuilder.item.CaptureArea;
 import com.maidbuilder.network.Payloads;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Block;
@@ -43,6 +49,7 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -356,6 +363,153 @@ public final class MaidBuilderGameTests {
         helper.succeed();
     }
 
+    // ---- 7b. a vanilla structure file (saved by Minecraft's own StructureTemplate) pastes back identically ----
+
+    @GameTest(template = FLOOR)
+    public static void vanillaStructureRoundTrip(GameTestHelper helper) throws IOException {
+        helper.setBlock(new BlockPos(2, 2, 2), Blocks.STONE_BRICKS);
+        helper.setBlock(new BlockPos(3, 2, 2), Blocks.OAK_STAIRS.defaultBlockState()
+                .setValue(BlockStateProperties.HORIZONTAL_FACING, net.minecraft.core.Direction.EAST));
+        helper.setBlock(new BlockPos(4, 2, 3), Blocks.OAK_LOG.defaultBlockState()
+                .setValue(BlockStateProperties.AXIS, net.minecraft.core.Direction.Axis.X));
+        helper.setBlock(new BlockPos(3, 2, 3), Blocks.CHEST);
+        helper.setBlock(new BlockPos(4, 3, 4), Blocks.STRUCTURE_VOID);
+        BlockPos door = new BlockPos(2, 2, 4);
+        for (BlockPlacer.Part part : BlockPlacer.partsOf(helper.absolutePos(door), Blocks.OAK_DOOR.defaultBlockState())) {
+            helper.getLevel().setBlock(part.pos(), part.state(), Block.UPDATE_CLIENTS);
+        }
+        BlockPos min = helper.absolutePos(new BlockPos(2, 2, 2)), max = helper.absolutePos(new BlockPos(4, 3, 4));
+
+        // Saved exactly like a structure block does: structure voids are left out of the file.
+        net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate template =
+                new net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate();
+        template.fillFromWorld(helper.getLevel(), min, new net.minecraft.core.Vec3i(3, 2, 3), false, Blocks.STRUCTURE_VOID);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        net.minecraft.nbt.NbtIo.writeCompressed(template.save(new net.minecraft.nbt.CompoundTag()), out);
+        String hash = SchematicStore.storeBytes(helper.getLevel().getServer(), out.toByteArray());
+        Schematic read = SchematicStore.loadStored(helper.getLevel().getServer(), hash);
+        if (read.countNonAir() != 6) helper.fail("expected 6 blocks (door counts twice), got " + read.countNonAir());
+
+        BlockPos offset = new BlockPos(8, 0, 0);
+        Placement placement = new Placement(Convert.toIntPos(min.offset(offset)), Rotation.NONE, Mirror.NONE);
+        StateResolver resolver = new StateResolver(read.minecraftDataVersion());
+        for (BuildStep step : BuildPlanner.plan(read, placement, new BuildPlanner.Options(true)).steps()) {
+            BlockPlacer.placeExact(helper.getLevel(), Convert.toBlockPos(step.worldPos()), resolver.resolve(step.schematicState(), placement));
+        }
+        for (BlockPos p : BlockPos.betweenClosed(min, max)) {
+            BlockState original = helper.getLevel().getBlockState(p);
+            BlockState copy = helper.getLevel().getBlockState(p.offset(offset));
+            BlockState expected = original.is(Blocks.STRUCTURE_VOID) ? Blocks.AIR.defaultBlockState() : original;
+            if (expected != copy) helper.fail("at " + p + ": " + original + " pasted as " + copy);
+        }
+        helper.succeed();
+    }
+
+    // ---- 7c. Blueprint Quill: whole-building selection, cancelling it, corners in the air, resizing ----
+
+    @GameTest(template = FLOOR)
+    public static void quillSelectsBuilding(GameTestHelper helper) {
+        // 3x3x3 hut with a block sticking out above (touching only diagonally), dirt + grass beside it,
+        // and an unrelated block further away. The floor is stone, i.e. terrain.
+        for (int x = 4; x <= 6; x++)
+            for (int y = 2; y <= 4; y++)
+                for (int z = 4; z <= 6; z++)
+                    if (x != 5 || z != 5) helper.setBlock(new BlockPos(x, y, z), Blocks.OAK_PLANKS);
+        helper.setBlock(new BlockPos(7, 5, 5), Blocks.OAK_PLANKS);
+        helper.setBlock(new BlockPos(3, 2, 5), Blocks.DIRT);
+        helper.setBlock(new BlockPos(3, 3, 5), Blocks.SHORT_GRASS);
+        helper.setBlock(new BlockPos(11, 2, 5), Blocks.COBBLESTONE);
+        ServerLevel level = helper.getLevel();
+        ServerPlayer player = net.neoforged.neoforge.common.util.FakePlayerFactory.get(level,
+                new com.mojang.authlib.GameProfile(UUID.randomUUID(), "maidbuilder_quill"));
+        ItemStack quill = new ItemStack(com.maidbuilder.init.ModItems.BLUEPRINT_QUILL.get());
+        player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND, quill);
+        var component = com.maidbuilder.init.ModDataComponents.CAPTURE_AREA.get();
+        BlockPos anchor = helper.absolutePos(new BlockPos(5, 2, 4));
+
+        // a building block: the whole hut incl. the overhang, waiting for confirmation
+        QuillActions.clickBlock(player, quill, anchor);
+        CaptureArea area = quill.get(component);
+        expectBox(helper, area, new BlockPos(4, 2, 4), new BlockPos(7, 5, 6));
+        if (!area.autoPending() || !area.anchor().get().equals(anchor)) helper.fail("auto selection not pending: " + area);
+
+        // sneak + click: back to "first corner = the clicked block"; the next block is the second corner
+        QuillActions.sneakClick(player, quill);
+        area = quill.get(component);
+        if (area == null || area.complete() || !area.first().equals(anchor)) helper.fail("cancel should keep the anchor as first corner: " + area);
+        QuillActions.clickBlock(player, quill, helper.absolutePos(new BlockPos(6, 4, 6)));
+        expectBox(helper, quill.get(component), new BlockPos(5, 2, 4), new BlockPos(6, 4, 6));
+        if (quill.get(component).autoPending()) helper.fail("manual box must not be pending");
+
+        // terrain and lone blocks are corners, not buildings
+        quill.remove(component);
+        QuillActions.clickBlock(player, quill, helper.absolutePos(new BlockPos(3, 2, 5)));
+        if (quill.get(component) == null || quill.get(component).complete()) helper.fail("dirt should be a first corner");
+        quill.remove(component);
+        QuillActions.clickBlock(player, quill, helper.absolutePos(new BlockPos(11, 2, 5)));
+        if (quill.get(component) == null || quill.get(component).complete()) helper.fail("a lone block should be a first corner");
+
+        // pending selection confirmed by a click into the air
+        quill.remove(component);
+        QuillActions.clickBlock(player, quill, anchor);
+        QuillActions.clickAir(player, quill);
+        area = quill.get(component);
+        expectBox(helper, area, new BlockPos(4, 2, 4), new BlockPos(7, 5, 6));
+        if (area.autoPending()) helper.fail("air click should confirm the selection");
+
+        // resizing: east of the box looking west at it moves the east face
+        BlockPos max = area.max();
+        player.moveTo(max.getX() + 6.5, max.getY() - 1.0, max.getZ() - 0.5, 90f, 0f);
+        if (area.faceFor(player) != net.minecraft.core.Direction.EAST) helper.fail("expected the east face, got " + area.faceFor(player));
+        QuillActions.adjust(player, true, 2);
+        expectBox(helper, quill.get(component), new BlockPos(4, 2, 4), new BlockPos(9, 5, 6));
+        QuillActions.adjust(player, false, 16);
+        expectBox(helper, quill.get(component), new BlockPos(4, 2, 4), new BlockPos(4, 5, 6));
+        // from inside, looking straight up: the top face
+        BlockPos inside = helper.absolutePos(new BlockPos(4, 3, 5));
+        player.moveTo(inside.getX() + 0.5, inside.getY(), inside.getZ() + 0.5, 0f, -90f);
+        QuillActions.adjust(player, true, 3);
+        expectBox(helper, quill.get(component), new BlockPos(4, 2, 4), new BlockPos(4, 8, 6));
+
+        // corners in the air, the second one further away after a distance change
+        quill.remove(component);
+        player.moveTo(inside.getX() + 0.5, inside.getY(), inside.getZ() + 0.5, 0f, 0f);
+        QuillActions.clickAir(player, quill);
+        area = quill.get(component);
+        if (area == null || area.complete() || !area.first().equals(CaptureArea.airPoint(player, CaptureArea.DEFAULT_AIR_DISTANCE))) {
+            helper.fail("air click should mark the first corner ahead: " + area);
+        }
+        QuillActions.adjust(player, true, 3);
+        if (quill.get(component).airDistance() != CaptureArea.DEFAULT_AIR_DISTANCE + 3) helper.fail("air distance not changed");
+        BlockPos firstAir = quill.get(component).first();
+        player.moveTo(inside.getX() + 0.5, inside.getY(), inside.getZ() + 0.5, 90f, 0f);
+        BlockPos secondAir = CaptureArea.airPoint(player, CaptureArea.DEFAULT_AIR_DISTANCE + 3);
+        QuillActions.clickAir(player, quill);
+        area = quill.get(component);
+        // a finished box is stored as its min/max corners
+        if (!area.complete() || !area.min().equals(BlockPos.min(firstAir, secondAir)) || !area.max().equals(BlockPos.max(firstAir, secondAir))) {
+            helper.fail("air click should mark the second corner at " + secondAir + ": " + area);
+        }
+
+        // a building larger than the limit falls back to corners
+        if (StructureDetector.detect(level, anchor, QuillActions.MAX_DETECT_BLOCKS, 8).outcome() != StructureDetector.Outcome.TOO_BIG) {
+            helper.fail("volume limit not applied");
+        }
+        helper.succeed();
+    }
+
+    private static void expectBox(GameTestHelper helper, CaptureArea area, BlockPos relMin, BlockPos relMax) {
+        if (area == null || !area.complete()) {
+            helper.fail("no box marked: " + area);
+            return;
+        }
+        BlockPos min = helper.absolutePos(relMin), max = helper.absolutePos(relMax);
+        if (!area.min().equals(min) || !area.max().equals(max)) {
+            helper.fail("box " + area.min().toShortString() + " .. " + area.max().toShortString()
+                    + ", expected " + min.toShortString() + " .. " + max.toShortString());
+        }
+    }
+
     // ---- 8. recipes: the wand on TLM's altar, the quill on a crafting table ----
 
     @GameTest(template = FLOOR)
@@ -512,7 +666,45 @@ public final class MaidBuilderGameTests {
     }
 
     private static void buildTower(GameTestHelper helper, int maids) {
-        int size = 5, height = 10;
+        buildTower(helper, maids, 10, 16);
+    }
+
+    // ---- tall structures: columns have to be raised several times ----
+
+    @GameTest(template = TALL_FLOOR, timeoutTicks = 24000)
+    public static void tallTowerOneMaid(GameTestHelper helper) {
+        buildTower(helper, 1, 18, 64);
+    }
+
+    @GameTest(template = TALL_FLOOR, timeoutTicks = 24000)
+    public static void tallTowerThreeMaids(GameTestHelper helper) {
+        buildTower(helper, 3, 18, 64);
+    }
+
+    @GameTest(template = TALL_FLOOR, timeoutTicks = 12000)
+    public static void tallPillar(GameTestHelper helper) {
+        int height = 18;
+        LitematicWriter.RegionBuilder rb = new LitematicWriter.RegionBuilder("pillar", IntPos.ZERO, new IntPos(1, height, 1));
+        for (int y = 0; y < height; y++) rb.set(0, y, 0, "minecraft:oak_planks");
+        BuildJob job = createJob(helper, LitematicWriter.schematic("pillar", 3955, List.of(rb.build())), PILLAR);
+        EntityMaid maid = spawnBuilderMaid(helper, job);
+        IItemHandler inv = maid.getAvailableInv(false);
+        ItemHandlerHelper.insertItemStacked(inv, new ItemStack(Items.OAK_PLANKS, height), false);
+        ItemHandlerHelper.insertItemStacked(inv, new ItemStack(Items.SCAFFOLDING, 32), false);
+        helper.succeedWhen(() -> {
+            if (!job.isComplete() || job.count(BuildJob.DONE) != job.size()) {
+                helper.fail("progress " + job.count(BuildJob.DONE) + "/" + job.size() + ", needs player " + job.count(BuildJob.NEEDS_PLAYER));
+            }
+            if (!job.scaffolds().isEmpty()) helper.fail(job.scaffolds().size() + " scaffolding still up");
+            if (count(inv, Items.SCAFFOLDING) != 32) helper.fail("maid holds " + count(inv, Items.SCAFFOLDING) + " scaffolding, expected 32");
+            if (maid.isShiftKeyDown()) helper.fail("maid is still sneaking");
+            MaidBuilder.LOGGER.info("BENCH tall pillar: {} ticks", helper.getTick());
+            BuildJobManager.data(helper.getLevel().getServer()).remove(job.id());
+        });
+    }
+
+    private static void buildTower(GameTestHelper helper, int maids, int height, int scaffoldingEach) {
+        int size = 5;
         LitematicWriter.RegionBuilder rb = new LitematicWriter.RegionBuilder("tower", IntPos.ZERO, new IntPos(size, height, size));
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < size; x++) {
@@ -535,7 +727,7 @@ public final class MaidBuilderGameTests {
         List<EntityMaid> team = new java.util.ArrayList<>();
         for (int i = 0; i < maids; i++) {
             EntityMaid maid = spawnBuilderMaid(helper, job, spawns[i]);
-            ItemHandlerHelper.insertItemStacked(maid.getAvailableInv(false), new ItemStack(Items.SCAFFOLDING, 16), false);
+            ItemHandlerHelper.insertItemStacked(maid.getAvailableInv(false), new ItemStack(Items.SCAFFOLDING, scaffoldingEach), false);
             team.add(maid);
         }
         helper.succeedWhen(() -> {
@@ -548,8 +740,8 @@ public final class MaidBuilderGameTests {
                 scaffolding += count(maid.getAvailableInv(false), Items.SCAFFOLDING);
                 if (maid.isShiftKeyDown()) helper.fail("a maid is still sneaking");
             }
-            if (scaffolding != 16 * maids) helper.fail("maids hold " + scaffolding + " scaffolding, expected " + 16 * maids);
-            MaidBuilder.LOGGER.info("BENCH tower with {} maid(s): {} ticks", maids, helper.getTick());
+            if (scaffolding != scaffoldingEach * maids) helper.fail("maids hold " + scaffolding + " scaffolding, expected " + scaffoldingEach * maids);
+            MaidBuilder.LOGGER.info("BENCH tower {} high with {} maid(s): {} ticks", height, maids, helper.getTick());
             BuildJobManager.data(helper.getLevel().getServer()).remove(job.id());
         });
     }
@@ -647,6 +839,73 @@ public final class MaidBuilderGameTests {
         if (!job.materialSources().isEmpty()) helper.fail("clicking the other half should unbind the chest, got " + job.materialSources());
         BuildJobManager.data(helper.getLevel().getServer()).remove(job.id());
         helper.succeed();
+    }
+
+    // ---- 16. material list: player, double chest and maid counted apart; built and unloaded parts handled ----
+
+    @GameTest(template = FLOOR)
+    public static void materialReportCountsAllSources(GameTestHelper helper) {
+        BuildJob job = createHutJob(helper);
+        net.minecraft.server.level.ServerPlayer player = net.neoforged.neoforge.common.util.FakePlayerFactory.get(
+                helper.getLevel(), new com.mojang.authlib.GameProfile(UUID.randomUUID(), "maidbuilder_test3"));
+        player.getInventory().clearContent();
+        player.getInventory().add(new ItemStack(Items.OAK_PLANKS, 2));
+        player.getInventory().add(new ItemStack(Items.OAK_DOOR, 1));
+
+        BlockPos leftRel = new BlockPos(1, 2, 1), rightRel = new BlockPos(1, 2, 2);
+        helper.setBlock(leftRel, Blocks.CHEST.defaultBlockState()
+                .setValue(net.minecraft.world.level.block.ChestBlock.FACING, net.minecraft.core.Direction.WEST)
+                .setValue(net.minecraft.world.level.block.ChestBlock.TYPE, net.minecraft.world.level.block.state.properties.ChestType.RIGHT));
+        helper.setBlock(rightRel, Blocks.CHEST.defaultBlockState()
+                .setValue(net.minecraft.world.level.block.ChestBlock.FACING, net.minecraft.core.Direction.WEST)
+                .setValue(net.minecraft.world.level.block.ChestBlock.TYPE, net.minecraft.world.level.block.state.properties.ChestType.LEFT));
+        IItemHandler chest = helper.getLevel().getCapability(net.neoforged.neoforge.capabilities.Capabilities.ItemHandler.BLOCK,
+                helper.absolutePos(leftRel), null);
+        if (chest == null) throw new IllegalStateException("chest has no item handler");
+        chest.insertItem(30, new ItemStack(Items.OAK_PLANKS, 5), false);
+        chest.insertItem(31, new ItemStack(Items.OAK_LOG, 1), false);
+        // Both halves listed: the double chest must still be counted once.
+        job.addMaterialSource(helper.absolutePos(leftRel));
+        job.addMaterialSource(helper.absolutePos(rightRel));
+        job.addMaterialSource(new BlockPos(1_000_000, 64, 1_000_000));
+
+        EntityMaid maid = spawnBuilderMaid(helper, job);
+        ItemHandlerHelper.insertItemStacked(maid.getAvailableInv(false), new ItemStack(Items.TORCH, 1), false);
+
+        // One block already built: it leaves "remaining" but stays in "total".
+        Item builtItem = job.requirements(0).get(0).item();
+        job.setStatus(0, BuildJob.DONE);
+
+        Payloads.MaterialReport report = com.maidbuilder.common.wand.MaterialReports.build(helper.getLevel(), player.getInventory(), job, false);
+        Map<Item, Payloads.MaterialRow> rows = new HashMap<>();
+        for (Payloads.MaterialRow row : report.rows()) rows.put(row.item(), row);
+        expectRow(helper, rows, Items.OAK_PLANKS, 9, 2, 5, 0, builtItem);
+        expectRow(helper, rows, Items.OAK_LOG, 2, 0, 1, 0, builtItem);
+        expectRow(helper, rows, Items.TORCH, 1, 0, 0, 1, builtItem);
+        expectRow(helper, rows, Items.OAK_DOOR, 1, 1, 0, 0, builtItem);
+        if (rows.size() != 4) helper.fail("unexpected rows " + rows.keySet());
+        if (report.maids() != 1) helper.fail("expected 1 maid, got " + report.maids());
+        if (report.unloadedSources() != 1) helper.fail("expected 1 unloaded container, got " + report.unloadedSources());
+        if (report.done() != 1 || report.total() != job.size()) helper.fail("progress " + report.done() + "/" + report.total());
+
+        maid.discard();
+        BuildJobManager.data(helper.getLevel().getServer()).remove(job.id());
+        helper.succeed();
+    }
+
+    private static void expectRow(GameTestHelper helper, Map<Item, Payloads.MaterialRow> rows, Item item, int total,
+                                  int player, int containers, int maids, Item builtItem) {
+        Payloads.MaterialRow row = rows.get(item);
+        if (row == null) {
+            helper.fail("no row for " + item);
+            return;
+        }
+        int remaining = item == builtItem ? total - 1 : total;
+        if (row.total() != total || row.remaining() != remaining || row.player() != player
+                || row.containers() != containers || row.maids() != maids) {
+            helper.fail("wrong counts for " + item + ": " + row + ", expected total " + total + " remaining " + remaining
+                    + " player " + player + " containers " + containers + " maids " + maids);
+        }
     }
 
     // ---- maid test helpers ----

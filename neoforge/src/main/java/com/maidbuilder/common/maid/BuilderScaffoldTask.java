@@ -40,7 +40,9 @@ import java.util.UUID;
  *   <li>walks to its foot and stacks scaffolding from her inventory (like a player extending a column from below);</li>
  *   <li>climbs it (scaffolding is climbable: she jumps inside it);</li>
  *   <li>builds every block she has materials for within reach of the top;</li>
- *   <li>sneaks to slide back down (sneaking entities fall through scaffolding).</li>
+ *   <li>if the next block in build order is out of reach but raising this column would reach it,
+ *       she stacks more scaffolding from where she stands and climbs on (no trip down and up);</li>
+ *   <li>otherwise sneaks to slide back down (sneaking entities fall through scaffolding).</li>
  * </ol>
  * The scaffolding stays up for later blocks and is taken down by {@link BuilderTeardownTask} once
  * the job is complete. Without scaffolding she asks her owner for some (or fetches it from a
@@ -195,6 +197,9 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
             enter(Stage.DONE);
             return;
         }
+        // When raising the column from its top she must stay up there meanwhile.
+        holdStill(maid);
+        maid.resetFallDistance();
         if (stageTicks % PLACE_INTERVAL != 0) return;
         maid.getLookControl().setLookAt(Vec3.atCenterOf(base));
         for (int y = base.getY(); y < standY; y++) {
@@ -277,9 +282,29 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
         }, MaidBuilderConfig.MAX_SCAN_PER_SEARCH.get());
         if (next >= 0 && job.claim(next, id)) {
             maid.getBrain().setMemory(MemoryModuleType.LOOK_TARGET, new BlockPosTracker(job.pos(next)));
-        } else {
+        } else if (!raise(level, maid, gameTime)) {
             enter(Stage.DESCEND);
         }
+    }
+
+    /**
+     * Nothing left in reach: if the block she would pick next is above her and raising this column
+     * reaches it, claim it and stack the extra scaffolding from up here (BUILD places at the top of
+     * the column, as clicking any scaffold of a column does), then climb on.
+     */
+    private boolean raise(ServerLevel level, EntityMaid maid, long gameTime) {
+        if (!MaidBuilderConfig.USE_SCAFFOLDING.get()) return false;
+        UUID id = maid.getUUID();
+        int next = BuilderFindTargetTask.pickNext(level, maid, job, session, gameTime);
+        if (next < 0 || job.pos(next).getY() < standY) return false;
+        ReachPlanner.Column raised = ReachPlanner.raiseColumn(level, maid, job, base, standY, job.pos(next));
+        if (raised == null || MaidInventory.count(maid, Items.SCAFFOLDING) < raised.newBlocks()) return false;
+        if (!job.claimColumn(raised.key(), id) || !job.claim(next, id)) return false;
+        MaidBuilder.LOGGER.debug("Maid {} raises the scaffolding at {} from stand y {} to {} ({} new) to reach {}",
+                id, base, standY, raised.standY(), raised.newBlocks(), job.pos(next));
+        standY = raised.standY();
+        enter(Stage.BUILD);
+        return true;
     }
 
     /** Sneaking makes scaffolding let her through; the fall is slowed so she lands softly. */

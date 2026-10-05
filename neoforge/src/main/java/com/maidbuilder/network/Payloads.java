@@ -127,6 +127,98 @@ public final class Payloads {
         }
     }
 
+    /** At most this many rows per material report; far more than any real schematic has item types. */
+    public static final int MAX_MATERIAL_ROWS = 4096;
+
+    /**
+     * One item of a material list.
+     *
+     * @param remaining  still needed for the blocks not built yet
+     * @param total      needed for the whole structure
+     * @param player     in the player's inventory
+     * @param containers in the job's material containers (0 before the job exists)
+     * @param maids      carried by the maids bound to the job (0 before the job exists)
+     */
+    public record MaterialRow(Item item, int remaining, int total, int player, int containers, int maids) {
+        public static final StreamCodec<RegistryFriendlyByteBuf, MaterialRow> CODEC = StreamCodec.of(
+                (buf, r) -> {
+                    ByteBufCodecs.registry(Registries.ITEM).encode(buf, r.item());
+                    buf.writeVarInt(r.remaining());
+                    buf.writeVarInt(r.total());
+                    buf.writeVarInt(r.player());
+                    buf.writeVarInt(r.containers());
+                    buf.writeVarInt(r.maids());
+                },
+                buf -> new MaterialRow(ByteBufCodecs.registry(Registries.ITEM).decode(buf),
+                        buf.readVarInt(), buf.readVarInt(), buf.readVarInt(), buf.readVarInt(), buf.readVarInt()));
+
+        public int available() {
+            return player + containers + maids;
+        }
+    }
+
+    /** Client -> server: send me the material list of the job linked to the wand I hold. */
+    public record RequestMaterialReport(boolean open) implements CustomPacketPayload {
+        public static final Type<RequestMaterialReport> TYPE = payloadType("request_material_report");
+        public static final StreamCodec<ByteBuf, RequestMaterialReport> CODEC = ByteBufCodecs.BOOL
+                .map(RequestMaterialReport::new, RequestMaterialReport::open);
+
+        @Override
+        public Type<RequestMaterialReport> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * Server -> client: the material list of a job.
+     *
+     * @param open             open the material screen (otherwise only refresh it if it shows this job)
+     * @param unloadedSources  material containers that could not be read because their chunk is not loaded
+     * @param maids            maids bound to the job in loaded chunks
+     */
+    public record MaterialReport(boolean open, UUID job, String name, int done, int total, int needsPlayer,
+                                 int sources, int unloadedSources, int maids, List<MaterialRow> rows) implements CustomPacketPayload {
+        public static final Type<MaterialReport> TYPE = payloadType("material_report");
+        public static final StreamCodec<RegistryFriendlyByteBuf, MaterialReport> CODEC = StreamCodec.of(
+                (buf, r) -> {
+                    buf.writeBoolean(r.open());
+                    UUIDUtil.STREAM_CODEC.encode(buf, r.job());
+                    ByteBufCodecs.STRING_UTF8.encode(buf, r.name());
+                    buf.writeVarInt(r.done());
+                    buf.writeVarInt(r.total());
+                    buf.writeVarInt(r.needsPlayer());
+                    buf.writeVarInt(r.sources());
+                    buf.writeVarInt(r.unloadedSources());
+                    buf.writeVarInt(r.maids());
+                    MaterialRow.CODEC.apply(ByteBufCodecs.list(MAX_MATERIAL_ROWS)).encode(buf, r.rows());
+                },
+                buf -> new MaterialReport(buf.readBoolean(), UUIDUtil.STREAM_CODEC.decode(buf), ByteBufCodecs.STRING_UTF8.decode(buf),
+                        buf.readVarInt(), buf.readVarInt(), buf.readVarInt(), buf.readVarInt(), buf.readVarInt(), buf.readVarInt(),
+                        MaterialRow.CODEC.apply(ByteBufCodecs.list(MAX_MATERIAL_ROWS)).decode(buf)));
+
+        @Override
+        public Type<MaterialReport> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * Client -> server: a resize key was pressed while holding the Blueprint Quill: move the face of
+     * the marked box the player points at (or, with one corner marked, the air distance).
+     */
+    public record QuillAdjust(boolean grow, int amount) implements CustomPacketPayload {
+        public static final Type<QuillAdjust> TYPE = payloadType("quill_adjust");
+        public static final StreamCodec<ByteBuf, QuillAdjust> CODEC = StreamCodec.composite(
+                ByteBufCodecs.BOOL, QuillAdjust::grow,
+                ByteBufCodecs.VAR_INT, QuillAdjust::amount,
+                QuillAdjust::new);
+
+        @Override
+        public Type<QuillAdjust> type() {
+            return TYPE;
+        }
+    }
+
     /** Client -> server: save the area marked with the held Blueprint Quill under this name. */
     public record CaptureRequest(String name) implements CustomPacketPayload {
         public static final Type<CaptureRequest> TYPE = payloadType("capture_request");

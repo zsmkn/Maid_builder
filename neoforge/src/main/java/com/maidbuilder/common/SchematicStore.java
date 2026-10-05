@@ -1,8 +1,8 @@
 package com.maidbuilder.common;
 
 import com.maidbuilder.MaidBuilderConfig;
-import com.maidbuilder.core.schematic.LitematicReader;
 import com.maidbuilder.core.schematic.Schematic;
+import com.maidbuilder.core.schematic.SchematicReader;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.level.storage.LevelResource;
 import net.neoforged.fml.loading.FMLPaths;
@@ -23,12 +23,13 @@ import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 /**
- * Locates and loads schematics.
+ * Locates and loads schematics ({@code .litematic} or vanilla structure {@code .nbt}; the format is
+ * told from the contents).
  * <ul>
  *   <li>User files: {@code <game dir>/schematics/} - the same folder Litematica uses, so on
  *       single player the player's existing files are available directly.</li>
- *   <li>Job copies: {@code <world>/maidbuilder/schematics/<sha1>.litematic}, so a job keeps
- *       working even if the user file is edited or deleted.</li>
+ *   <li>Job copies: {@code <world>/maidbuilder/schematics/<sha1>.litematic} (whatever the actual
+ *       format), so a job keeps working even if the user file is edited or deleted.</li>
  * </ul>
  */
 public final class SchematicStore {
@@ -57,7 +58,7 @@ public final class SchematicStore {
         Path dir = userDir();
         if (!Files.isDirectory(dir)) return List.of();
         try (Stream<Path> files = Files.walk(dir, 8)) {
-            return files.filter(p -> Files.isRegularFile(p) && p.getFileName().toString().endsWith(EXTENSION))
+            return files.filter(p -> Files.isRegularFile(p) && SchematicReader.isSchematicFile(p.getFileName().toString()))
                     .map(p -> dir.relativize(p).toString().replace('\\', '/'))
                     .sorted()
                     .toList();
@@ -94,11 +95,15 @@ public final class SchematicStore {
     /** Resolves a user-supplied relative name, refusing anything outside the schematics folder. */
     public static Path resolveUserFile(String name) throws IOException {
         Path dir = userDir().toAbsolutePath().normalize();
-        String fileName = name.endsWith(EXTENSION) ? name : name + EXTENSION;
-        Path file = dir.resolve(fileName).normalize();
-        if (!file.startsWith(dir)) throw new IOException("Path escapes the schematics folder: " + name);
-        if (!Files.isRegularFile(file)) throw new IOException("No such schematic: " + fileName);
-        return file;
+        // Without an extension, take the first supported format that exists ("house" -> house.litematic or house.nbt).
+        List<String> candidates = SchematicReader.isSchematicFile(name) ? List.of(name)
+                : SchematicReader.EXTENSIONS.stream().map(ext -> name + ext).toList();
+        for (String fileName : candidates) {
+            Path file = dir.resolve(fileName).normalize();
+            if (!file.startsWith(dir)) throw new IOException("Path escapes the schematics folder: " + name);
+            if (Files.isRegularFile(file)) return file;
+        }
+        throw new IOException("No such schematic: " + candidates.getFirst());
     }
 
     public static Schematic load(Path file) throws IOException {
@@ -123,7 +128,7 @@ public final class SchematicStore {
         return hash;
     }
 
-    /** Stores raw .litematic bytes (e.g. an upload) after validating them; returns the SHA-1 id. */
+    /** Stores raw schematic bytes (e.g. an upload) after validating them; returns the SHA-1 id. */
     public static String storeBytes(MinecraftServer server, byte[] bytes) throws IOException {
         reader().read(new java.io.ByteArrayInputStream(bytes));
         String hash;
@@ -155,8 +160,8 @@ public final class SchematicStore {
         CACHE.clear();
     }
 
-    private static LitematicReader reader() {
-        return new LitematicReader(MaidBuilderConfig.MAX_SCHEMATIC_VOLUME.get(), 512L * 1024 * 1024);
+    private static SchematicReader reader() {
+        return new SchematicReader(MaidBuilderConfig.MAX_SCHEMATIC_VOLUME.get(), 512L * 1024 * 1024);
     }
 
     public static String sha1(Path file) throws IOException {

@@ -21,6 +21,8 @@ public final class WandKeys {
     public static final KeyMapping BACK = key("back", GLFW.GLFW_KEY_DOWN);
     public static final KeyMapping LEFT = key("left", GLFW.GLFW_KEY_LEFT);
     public static final KeyMapping RIGHT = key("right", GLFW.GLFW_KEY_RIGHT);
+    /** Opens the material list; works whether or not the wand is linked to a job. */
+    public static final KeyMapping MATERIALS = key("materials", GLFW.GLFW_KEY_B);
 
     static final Map<KeyMapping, Payloads.Adjustment> ACTIONS = Map.of(
             ROTATE, Payloads.Adjustment.ROTATE,

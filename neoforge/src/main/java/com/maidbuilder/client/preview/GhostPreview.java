@@ -1,8 +1,10 @@
 package com.maidbuilder.client.preview;
 
+import com.maidbuilder.client.MaidBuilderClientConfig;
 import com.maidbuilder.common.BlockPlacer;
 import com.maidbuilder.common.Convert;
 import com.maidbuilder.common.StateResolver;
+import com.maidbuilder.common.job.BuildJob;
 import com.maidbuilder.core.plan.BuildPlan;
 import com.maidbuilder.core.plan.BuildPlanner;
 import com.maidbuilder.core.plan.BuildStep;
@@ -36,6 +38,7 @@ import net.minecraft.client.resources.model.BakedModel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
 import net.minecraft.util.RandomSource;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
@@ -43,10 +46,12 @@ import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 import net.neoforged.neoforge.client.model.data.ModelData;
 import org.joml.Matrix4f;
+import org.joml.Matrix4fStack;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -62,8 +67,6 @@ import java.util.Map;
  */
 public final class GhostPreview implements AutoCloseable {
     public static final byte UNKNOWN = 0, MATCH = 1, MISSING = 2, WRONG = 3;
-    private static final float GHOST_ALPHA = 0.45f;
-    private static final int RENDER_DISTANCE = 160;
     private static final int MAX_REBUILDS_PER_FRAME = 2;
     private static final int MAX_OUTLINES = 4096;
 
@@ -73,6 +76,8 @@ public final class GhostPreview implements AutoCloseable {
         final BlockPos[] pos;
         final BlockState[] state;
         final byte[] status;
+        /** Index into {@link #requirements} for a block's first part, -1 for the other half of a door or bed. */
+        final int[] step;
         int signature = Integer.MIN_VALUE;
         boolean dirty;
         VertexBuffer buffer;
@@ -80,12 +85,13 @@ public final class GhostPreview implements AutoCloseable {
         final List<BlockPos> placeholders = new ArrayList<>();
         int match, missing, wrong;
 
-        Section(BlockPos origin, List<BlockPos> pos, List<BlockState> state) {
+        Section(BlockPos origin, List<BlockPos> pos, List<BlockState> state, List<Integer> step) {
             this.origin = origin;
             this.box = new AABB(origin.getX(), origin.getY(), origin.getZ(), origin.getX() + 16, origin.getY() + 16, origin.getZ() + 16);
             this.pos = pos.toArray(BlockPos[]::new);
             this.state = state.toArray(BlockState[]::new);
             this.status = new byte[this.pos.length];
+            this.step = step.stream().mapToInt(Integer::intValue).toArray();
         }
     }
 
@@ -93,11 +99,17 @@ public final class GhostPreview implements AutoCloseable {
     private final List<Section> sections;
     private final BlockPos min, max;
     private final int total;
+    /** Items each placed block consumes, indexed by {@link Section#step}. */
+    private final List<List<BuildJob.Requirement>> requirements;
     private int scanCursor;
+    /** Ghost opacity the section meshes were built with; a changed setting rebuilds them. */
+    private float bakedAlpha = -1;
 
-    private GhostPreview(WandPlacement placement, List<Section> sections, BlockPos min, BlockPos max, int total) {
+    private GhostPreview(WandPlacement placement, List<Section> sections, List<List<BuildJob.Requirement>> requirements,
+                         BlockPos min, BlockPos max, int total) {
         this.placement = placement;
         this.sections = sections;
+        this.requirements = requirements;
         this.min = min;
         this.max = max;
         this.total = total;
@@ -110,25 +122,32 @@ public final class GhostPreview implements AutoCloseable {
         StateResolver resolver = new StateResolver(schematic.minecraftDataVersion());
         Map<Long, List<BlockPos>> positions = new HashMap<>();
         Map<Long, List<BlockState>> states = new HashMap<>();
+        Map<Long, List<Integer>> steps = new HashMap<>();
+        List<List<BuildJob.Requirement>> requirements = new ArrayList<>();
         int count = 0;
         for (BuildStep step : plan.steps()) {
             BlockState state = resolver.resolve(step.schematicState(), placement);
             if (state.isAir()) continue;
+            int stepIndex = requirements.size();
+            requirements.add(BuildJob.requirementsFor(step.schematicState(), state));
+            boolean first = true;
             for (BlockPlacer.Part part : BlockPlacer.partsOf(Convert.toBlockPos(step.worldPos()), state)) {
                 long key = SectionPos.asLong(part.pos());
                 positions.computeIfAbsent(key, k -> new ArrayList<>()).add(part.pos());
                 states.computeIfAbsent(key, k -> new ArrayList<>()).add(part.state());
+                steps.computeIfAbsent(key, k -> new ArrayList<>()).add(first ? stepIndex : -1);
+                first = false;
                 count++;
             }
         }
         List<Section> sections = new ArrayList<>(positions.size());
         for (Map.Entry<Long, List<BlockPos>> e : positions.entrySet()) {
             SectionPos sp = SectionPos.of(e.getKey());
-            sections.add(new Section(sp.origin(), e.getValue(), states.get(e.getKey())));
+            sections.add(new Section(sp.origin(), e.getValue(), states.get(e.getKey()), steps.get(e.getKey())));
         }
         BlockPos min = Convert.toBlockPos(placement.toWorld(schematic.minCorner()));
         BlockPos max = Convert.toBlockPos(placement.toWorld(schematic.maxCorner()));
-        return new GhostPreview(wand, sections, BlockPos.min(min, max), BlockPos.max(min, max), count);
+        return new GhostPreview(wand, sections, requirements, BlockPos.min(min, max), BlockPos.max(min, max), count);
     }
 
     // ---- world comparison ----
@@ -185,6 +204,26 @@ public final class GhostPreview implements AutoCloseable {
         return n;
     }
 
+    /**
+     * Items needed for the whole structure ({@code [1]}) and for the blocks the world does not
+     * have yet ({@code [0]}; blocks in unloaded or not yet compared chunks count as missing).
+     */
+    public Map<Item, int[]> materials() {
+        Map<Item, int[]> result = new LinkedHashMap<>();
+        for (Section s : sections) {
+            for (int i = 0; i < s.pos.length; i++) {
+                if (s.step[i] < 0) continue;
+                boolean built = s.status[i] == MATCH;
+                for (BuildJob.Requirement r : requirements.get(s.step[i])) {
+                    int[] counts = result.computeIfAbsent(r.item(), k -> new int[2]);
+                    counts[1] += r.count();
+                    if (!built) counts[0] += r.count();
+                }
+            }
+        }
+        return result;
+    }
+
     // ---- rendering ----
 
     public void render(RenderLevelStageEvent event) {
@@ -195,22 +234,41 @@ public final class GhostPreview implements AutoCloseable {
         Vec3 cam = camera.getPosition();
         Frustum frustum = event.getFrustum();
 
+        float alpha = MaidBuilderClientConfig.GHOST_OPACITY.get().floatValue();
+        if (alpha != bakedAlpha) {
+            bakedAlpha = alpha;
+            for (Section s : sections) s.dirty = true;
+        }
+        double distance = MaidBuilderClientConfig.PREVIEW_RENDER_DISTANCE.get();
         int rebuilds = 0;
         List<Section> visible = new ArrayList<>();
         for (Section s : sections) {
-            if (s.box.getCenter().distanceToSqr(cam) > (double) RENDER_DISTANCE * RENDER_DISTANCE) continue;
+            if (s.box.getCenter().distanceToSqr(cam) > distance * distance) continue;
             if (!frustum.isVisible(s.box)) continue;
             if (s.dirty && rebuilds < MAX_REBUILDS_PER_FRAME) {
-                rebuild(s, level);
+                rebuild(s, level, alpha);
                 rebuilds++;
             }
             visible.add(s);
         }
         drawGhosts(visible, event.getModelViewMatrix(), event.getProjectionMatrix(), cam);
+        // After the level pass the camera rotation is no longer on the global model-view stack,
+        // which the line shader reads; put it back for the outlines.
+        boolean afterLevel = event.getStage() == RenderLevelStageEvent.Stage.AFTER_LEVEL;
+        Matrix4fStack modelViewStack = RenderSystem.getModelViewStack();
+        if (afterLevel) {
+            modelViewStack.pushMatrix();
+            modelViewStack.mul(event.getModelViewMatrix());
+            RenderSystem.applyModelViewMatrix();
+        }
         drawOutlines(visible, cam);
+        if (afterLevel) {
+            modelViewStack.popMatrix();
+            RenderSystem.applyModelViewMatrix();
+        }
     }
 
-    private static void rebuild(Section s, ClientLevel level) {
+    private static void rebuild(Section s, ClientLevel level, float alpha) {
         s.dirty = false;
         s.placeholders.clear();
         Minecraft mc = Minecraft.getInstance();
@@ -224,7 +282,7 @@ public final class GhostPreview implements AutoCloseable {
 
         try (ByteBufferBuilder bytes = new ByteBufferBuilder(Math.max(4096, missing * 24 * DefaultVertexFormat.BLOCK.getVertexSize()))) {
             BufferBuilder builder = new BufferBuilder(bytes, VertexFormat.Mode.QUADS, DefaultVertexFormat.BLOCK);
-            VertexConsumer consumer = new AlphaVertexConsumer(builder, GHOST_ALPHA);
+            VertexConsumer consumer = new AlphaVertexConsumer(builder, alpha);
             for (int i = 0; i < s.pos.length; i++) {
                 if (s.status[i] != MISSING) continue;
                 BlockState state = s.state[i];
@@ -285,11 +343,14 @@ public final class GhostPreview implements AutoCloseable {
         VertexConsumer lines = buffers.getBuffer(RenderType.lines());
         PoseStack poseStack = new PoseStack();
         poseStack.translate(-cam.x, -cam.y, -cam.z);
-        LevelRenderer.renderLineBox(poseStack, lines, new AABB(Vec3.atLowerCornerOf(min), Vec3.atLowerCornerOf(max).add(1, 1, 1)),
-                1f, 1f, 1f, 0.6f);
+        if (MaidBuilderClientConfig.SHOW_BOUNDING_BOX.get()) {
+            LevelRenderer.renderLineBox(poseStack, lines, new AABB(Vec3.atLowerCornerOf(min), Vec3.atLowerCornerOf(max).add(1, 1, 1)),
+                    1f, 1f, 1f, 0.6f);
+        }
+        boolean showWrong = MaidBuilderClientConfig.SHOW_WRONG_BLOCKS.get();
         int drawn = 0;
         for (Section s : visible) {
-            for (BlockPos pos : s.outlines) {
+            for (BlockPos pos : showWrong ? s.outlines : List.<BlockPos>of()) {
                 if (drawn++ > MAX_OUTLINES) break;
                 LevelRenderer.renderLineBox(poseStack, lines, new AABB(pos).inflate(0.005), 1f, 0.2f, 0.2f, 1f);
             }

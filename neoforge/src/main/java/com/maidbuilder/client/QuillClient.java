@@ -15,7 +15,9 @@ import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemStack;
@@ -40,7 +42,7 @@ public final class QuillClient {
     }
 
     @Nullable
-    private static ItemStack heldQuill(LocalPlayer player) {
+    static ItemStack heldQuill(LocalPlayer player) {
         for (InteractionHand hand : InteractionHand.values()) {
             ItemStack stack = player.getItemInHand(hand);
             if (stack.is(ModItems.BLUEPRINT_QUILL.get())) return stack;
@@ -48,15 +50,25 @@ public final class QuillClient {
         return null;
     }
 
-    /** The marked area, or while only the first corner is set, the area up to the looked-at block. */
+    /** Blocks one resize key press moves: 5 while Shift is held. */
+    static int step() {
+        return Screen.hasShiftDown() ? 5 : 1;
+    }
+
     @Nullable
-    private static CaptureArea shownArea(Minecraft mc, ItemStack quill) {
+    private static CaptureArea marked(Minecraft mc, ItemStack quill) {
         CaptureArea area = quill.get(ModDataComponents.CAPTURE_AREA.get());
-        if (area == null || mc.level == null || !area.dimension().equals(mc.level.dimension())) return null;
-        if (!area.complete() && mc.hitResult instanceof BlockHitResult hit && hit.getType() == HitResult.Type.BLOCK) {
-            return new CaptureArea(area.dimension(), area.first(), java.util.Optional.of(hit.getBlockPos()));
-        }
-        return area;
+        return area == null || mc.level == null || !area.dimension().equals(mc.level.dimension()) ? null : area;
+    }
+
+    private static boolean lookingAtBlock(Minecraft mc) {
+        return mc.hitResult instanceof BlockHitResult hit && hit.getType() == HitResult.Type.BLOCK;
+    }
+
+    /** Where a right-click would put the next corner: the looked-at block, or a point in the air. */
+    private static BlockPos nextCorner(Minecraft mc, @Nullable CaptureArea area) {
+        if (mc.hitResult instanceof BlockHitResult hit && hit.getType() == HitResult.Type.BLOCK) return hit.getBlockPos();
+        return CaptureArea.airPoint(mc.player, area == null ? CaptureArea.DEFAULT_AIR_DISTANCE : area.airDistance());
     }
 
     @SubscribeEvent
@@ -66,51 +78,80 @@ public final class QuillClient {
         if (mc.player == null) return;
         ItemStack quill = heldQuill(mc.player);
         if (quill == null) return;
-        CaptureArea marked = quill.get(ModDataComponents.CAPTURE_AREA.get());
-        CaptureArea shown = shownArea(mc, quill);
-        if (marked == null || shown == null) return;
+        CaptureArea area = marked(mc, quill);
 
         Vec3 cam = event.getCamera().getPosition();
         MultiBufferSource.BufferSource buffers = mc.renderBuffers().bufferSource();
         VertexConsumer lines = buffers.getBuffer(RenderType.lines());
         PoseStack poseStack = new PoseStack();
         poseStack.translate(-cam.x, -cam.y, -cam.z);
-        AABB box = new AABB(Vec3.atLowerCornerOf(shown.min()), Vec3.atLowerCornerOf(shown.max()).add(1, 1, 1)).inflate(0.01);
-        if (marked.complete()) {
-            LevelRenderer.renderLineBox(poseStack, lines, box, 0.3f, 0.8f, 1f, 1f);
+        if (area == null) {
+            // where a click into the air would mark the first corner
+            if (!lookingAtBlock(mc)) {
+                LevelRenderer.renderLineBox(poseStack, lines, new AABB(nextCorner(mc, null)).inflate(0.02), 1f, 1f, 1f, 0.7f);
+            }
+        } else if (!area.complete()) {
+            BlockPos next = nextCorner(mc, area);
+            LevelRenderer.renderLineBox(poseStack, lines, area.withSecond(next).bounds().inflate(0.01), 1f, 1f, 1f, 0.5f);
+            LevelRenderer.renderLineBox(poseStack, lines, new AABB(area.first()).inflate(0.02), 1f, 0.85f, 0.2f, 1f);
+            if (!lookingAtBlock(mc)) LevelRenderer.renderLineBox(poseStack, lines, new AABB(next).inflate(0.02), 1f, 1f, 1f, 1f);
         } else {
-            LevelRenderer.renderLineBox(poseStack, lines, box, 1f, 1f, 1f, 0.5f);
+            AABB box = area.bounds().inflate(0.01);
+            if (area.autoPending()) {
+                LevelRenderer.renderLineBox(poseStack, lines, box, 1f, 0.8f, 0.2f, 1f);
+                LevelRenderer.renderLineBox(poseStack, lines, new AABB(area.anchor().get()).inflate(0.02), 1f, 0.5f, 0.1f, 1f);
+            } else {
+                LevelRenderer.renderLineBox(poseStack, lines, box, 0.3f, 0.8f, 1f, 1f);
+            }
+            // the face the resize keys would move
+            LevelRenderer.renderLineBox(poseStack, lines, face(area.bounds(), area.faceFor(mc.player)).inflate(0.03), 0.4f, 1f, 0.4f, 1f);
         }
-        LevelRenderer.renderLineBox(poseStack, lines, new AABB(marked.first()).inflate(0.02), 1f, 0.85f, 0.2f, 1f);
-        marked.second().ifPresent(p -> LevelRenderer.renderLineBox(poseStack, lines, new AABB(p).inflate(0.02), 1f, 0.5f, 0.1f, 1f));
         buffers.endBatch(RenderType.lines());
+    }
+
+    /** A flat box covering one face of {@code box}. */
+    private static AABB face(AABB box, Direction face) {
+        return switch (face) {
+            case EAST -> new AABB(box.maxX, box.minY, box.minZ, box.maxX, box.maxY, box.maxZ);
+            case WEST -> new AABB(box.minX, box.minY, box.minZ, box.minX, box.maxY, box.maxZ);
+            case UP -> new AABB(box.minX, box.maxY, box.minZ, box.maxX, box.maxY, box.maxZ);
+            case DOWN -> new AABB(box.minX, box.minY, box.minZ, box.maxX, box.minY, box.maxZ);
+            case SOUTH -> new AABB(box.minX, box.minY, box.maxZ, box.maxX, box.maxY, box.maxZ);
+            case NORTH -> new AABB(box.minX, box.minY, box.minZ, box.maxX, box.maxY, box.minZ);
+        };
     }
 
     public static void renderHud(GuiGraphics graphics, DeltaTracker deltaTracker) {
         Minecraft mc = Minecraft.getInstance();
-        if (mc.player == null || mc.options.hideGui || mc.getDebugOverlay().showDebugScreen()) return;
+        if (mc.player == null || mc.options.hideGui || mc.getDebugOverlay().showDebugScreen()
+                || !MaidBuilderClientConfig.SHOW_HUD.get()) return;
         ItemStack quill = heldQuill(mc.player);
         if (quill == null || PreviewManager.heldWand(mc.player) != null) return;
-        CaptureArea marked = quill.get(ModDataComponents.CAPTURE_AREA.get());
+        CaptureArea area = marked(mc, quill);
+        Component grow = WandKeys.UP.getTranslatedKeyMessage(), shrink = WandKeys.DOWN.getTranslatedKeyMessage();
         List<Component> lines = new ArrayList<>();
         lines.add(Component.translatable("item.maidbuilder.blueprint_quill").withStyle(ChatFormatting.GOLD));
-        if (marked == null) {
-            lines.add(Component.translatable("hud.maidbuilder.quill.first"));
+        if (area == null) {
+            lines.add(Component.translatable("hud.maidbuilder.quill.start"));
+            lines.add(Component.translatable("hud.maidbuilder.quill.air", CaptureArea.DEFAULT_AIR_DISTANCE));
+        } else if (!area.complete()) {
+            lines.add(Component.translatable("tooltip.maidbuilder.quill.first", area.first().toShortString()));
+            lines.add(Component.translatable("hud.maidbuilder.quill.second", area.airDistance(), grow, shrink));
+            sizeLine(lines, area.withSecond(nextCorner(mc, area)));
+            lines.add(Component.translatable("hud.maidbuilder.quill.keys_corner").withStyle(ChatFormatting.DARK_GRAY));
         } else {
-            lines.add(Component.translatable("tooltip.maidbuilder.quill.first", marked.first().toShortString()));
-            if (marked.complete()) {
-                lines.add(Component.translatable("tooltip.maidbuilder.quill.second", marked.second().get().toShortString()));
+            Component face = Component.translatable("direction.maidbuilder." + area.faceFor(mc.player).getSerializedName());
+            if (area.autoPending()) {
+                lines.add(Component.translatable("hud.maidbuilder.quill.auto").withStyle(ChatFormatting.YELLOW));
             } else {
-                lines.add(Component.translatable("hud.maidbuilder.quill.second"));
+                lines.add(Component.translatable("tooltip.maidbuilder.quill.first", area.min().toShortString()));
+                lines.add(Component.translatable("tooltip.maidbuilder.quill.second", area.max().toShortString()));
             }
-            CaptureArea shown = shownArea(mc, quill);
-            if (shown != null && shown.complete()) {
-                BlockPos s = shown.size();
-                lines.add(Component.translatable("hud.maidbuilder.quill.size", s.getX(), s.getY(), s.getZ(), shown.volume())
-                        .withStyle(ChatFormatting.AQUA));
-            }
+            sizeLine(lines, area);
+            lines.add(Component.translatable("hud.maidbuilder.quill.resize", grow, shrink, face).withStyle(ChatFormatting.GREEN));
+            lines.add(Component.translatable(area.autoPending() ? "hud.maidbuilder.quill.keys_auto" : "hud.maidbuilder.quill.keys")
+                    .withStyle(ChatFormatting.DARK_GRAY));
         }
-        lines.add(Component.translatable("hud.maidbuilder.quill.keys").withStyle(ChatFormatting.DARK_GRAY));
 
         Font font = mc.font;
         int width = 0;
@@ -121,6 +162,12 @@ public final class QuillClient {
             graphics.drawString(font, line, x, y, 0xFFFFFF, false);
             y += lineHeight;
         }
+    }
+
+    private static void sizeLine(List<Component> lines, CaptureArea area) {
+        BlockPos s = area.size();
+        lines.add(Component.translatable("hud.maidbuilder.quill.size", s.getX(), s.getY(), s.getZ(), area.volume())
+                .withStyle(ChatFormatting.AQUA));
     }
 
     @SubscribeEvent

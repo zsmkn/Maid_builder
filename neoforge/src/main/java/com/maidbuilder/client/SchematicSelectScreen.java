@@ -18,7 +18,7 @@ import java.io.File;
 import java.util.List;
 import java.util.Locale;
 
-/** Lists the .litematic files in the player's schematics folder; picking one starts positioning it. */
+/** Lists the .litematic and .nbt files in the player's schematics folder; picking one starts positioning it. */
 public class SchematicSelectScreen extends Screen {
     private FileList list;
     private EditBox search;

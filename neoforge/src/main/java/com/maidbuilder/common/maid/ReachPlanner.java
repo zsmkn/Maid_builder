@@ -195,6 +195,24 @@ final class ReachPlanner {
     }
 
     /**
+     * The column at {@code base} raised so that, standing on top, the maid reaches {@code target};
+     * null if raising this column (above {@code standY}) does not do.
+     */
+    @Nullable
+    static Column raiseColumn(ServerLevel level, EntityMaid maid, BuildJob job, BlockPos base, int standY, BlockPos target) {
+        double eye = maid.getEyeHeight();
+        int maxHeight = MaidBuilderConfig.MAX_SCAFFOLD_HEIGHT.get();
+        // as in planColumn: eyes level with the target if possible, lower otherwise
+        for (int y = (int) Math.floor(target.getY() + 1.0 - eye); y > standY; y--) {
+            BlockPos stand = base.atY(y);
+            if (!reaches(stand, eye, target)) continue;
+            Column c = columnBelow(level, job, stand, maxHeight);
+            if (c != null && c.base().equals(base)) return c;
+        }
+        return null;
+    }
+
+    /**
      * Checks the cells under a stand position down to firm ground: they must be empty (or already
      * scaffolding) and not part of the structure, and the stand position must leave head room.
      */

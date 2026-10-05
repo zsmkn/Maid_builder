@@ -25,7 +25,8 @@ public final class WandHud {
 
     public static void render(GuiGraphics graphics, DeltaTracker deltaTracker) {
         Minecraft mc = Minecraft.getInstance();
-        if (mc.player == null || mc.options.hideGui || mc.getDebugOverlay().showDebugScreen()) return;
+        if (mc.player == null || mc.options.hideGui || mc.getDebugOverlay().showDebugScreen()
+                || !MaidBuilderClientConfig.SHOW_HUD.get()) return;
         ItemStack wand = PreviewManager.heldWand(mc.player);
         if (wand == null) return;
         WandPlacement placement = wand.get(ModDataComponents.WAND_PLACEMENT.get());
@@ -63,7 +64,8 @@ public final class WandHud {
             }
         }
         lines.add(Component.translatable(jobId == null ? "hud.maidbuilder.keys" : "hud.maidbuilder.keys_linked",
-                WandKeys.ROTATE.getTranslatedKeyMessage(), WandKeys.MIRROR.getTranslatedKeyMessage()).withStyle(ChatFormatting.DARK_GRAY));
+                WandKeys.ROTATE.getTranslatedKeyMessage(), WandKeys.MIRROR.getTranslatedKeyMessage(),
+                WandKeys.MATERIALS.getTranslatedKeyMessage()).withStyle(ChatFormatting.DARK_GRAY));
 
         Font font = mc.font;
         int width = 0;

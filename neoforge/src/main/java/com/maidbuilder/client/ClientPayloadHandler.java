@@ -40,6 +40,16 @@ public final class ClientPayloadHandler {
         lastStatusTime = System.currentTimeMillis();
     }
 
+    /** Refreshes an open material screen of the same job, or opens one when asked to. */
+    public static void onMaterialReport(Payloads.MaterialReport report) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.screen instanceof MaterialListScreen screen && screen.showsJob(report.job())) {
+            screen.update(report);
+        } else if (report.open() && mc.player != null) {
+            mc.setScreen(MaterialListScreen.forJob(report));
+        }
+    }
+
     /** Latest status for the given job, if received within the last few seconds. */
     @Nullable
     public static Payloads.JobStatus status(java.util.UUID job) {

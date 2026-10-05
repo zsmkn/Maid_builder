@@ -2,6 +2,7 @@ package com.maidbuilder.client;
 
 import com.maidbuilder.MaidBuilder;
 import com.maidbuilder.client.preview.GhostPreview;
+import com.maidbuilder.client.preview.ShaderCompat;
 import com.maidbuilder.init.ModDataComponents;
 import com.maidbuilder.init.ModItems;
 import com.maidbuilder.item.WandPlacement;
@@ -10,6 +11,7 @@ import net.minecraft.Util;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.network.chat.Component;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemStack;
 import net.neoforged.api.distmarker.Dist;
@@ -90,13 +92,33 @@ public final class PreviewManager {
         if (current != null) current.tick(mc.level, SCAN_BUDGET);
     }
 
+    /** Wand keys move the placement; held with the Blueprint Quill instead, up/down resize its box. */
     private static void handleKeys(@Nullable ItemStack wand, @Nullable WandPlacement placement) {
+        LocalPlayer player = Minecraft.getInstance().player;
+        boolean quill = wand == null && player != null && QuillClient.heldQuill(player) != null;
         for (KeyMapping key : WandKeys.ALL) {
             while (key.consumeClick()) {
                 if (wand != null && placement != null && !wand.has(ModDataComponents.BUILD_JOB.get())) {
                     PacketDistributor.sendToServer(new Payloads.AdjustPlacement(WandKeys.ACTIONS.get(key)));
+                } else if (quill && (key == WandKeys.UP || key == WandKeys.DOWN)) {
+                    PacketDistributor.sendToServer(new Payloads.QuillAdjust(key == WandKeys.UP, QuillClient.step()));
                 }
             }
+        }
+        while (WandKeys.MATERIALS.consumeClick()) {
+            if (wand != null) openMaterials(wand, placement);
+        }
+    }
+
+    /** Linked wand: ask the server for the job's list; otherwise list the previewed placement. */
+    private static void openMaterials(ItemStack wand, @Nullable WandPlacement placement) {
+        Minecraft mc = Minecraft.getInstance();
+        if (wand.has(ModDataComponents.BUILD_JOB.get())) {
+            PacketDistributor.sendToServer(new Payloads.RequestMaterialReport(true));
+        } else if (placement == null) {
+            if (mc.player != null) mc.player.displayClientMessage(Component.translatable("message.maidbuilder.wand.select_first"), true);
+        } else {
+            mc.setScreen(MaterialListScreen.forPreview());
         }
     }
 
@@ -141,9 +163,16 @@ public final class PreviewManager {
         }
     }
 
+    /**
+     * Normally drawn with the translucent blocks. With a shader pack the pack would light and blend
+     * the ghosts like real blocks, so they are drawn after its final pass (AFTER_LEVEL comes after
+     * Iris has composited the frame but before the depth buffer is cleared for the hand).
+     */
     @SubscribeEvent
     public static void onRenderLevel(RenderLevelStageEvent event) {
-        if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_TRANSLUCENT_BLOCKS) return;
+        RenderLevelStageEvent.Stage stage = MaidBuilderClientConfig.SHADER_OVERLAY.get() && ShaderCompat.shaderPackInUse()
+                ? RenderLevelStageEvent.Stage.AFTER_LEVEL : RenderLevelStageEvent.Stage.AFTER_TRANSLUCENT_BLOCKS;
+        if (event.getStage() != stage) return;
         GhostPreview preview = ClientSelfTest.preview != null ? ClientSelfTest.preview : current;
         if (preview != null) preview.render(event);
     }

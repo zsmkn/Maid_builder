@@ -56,6 +56,7 @@ public final class JobStatusSync {
     public static void onLogout(PlayerEvent.PlayerLoggedOutEvent event) {
         UploadManager.forget(event.getEntity().getUUID());
         WandActions.forget(event.getEntity().getUUID());
+        MaterialReports.forget(event.getEntity().getUUID());
         com.maidbuilder.common.capture.CaptureActions.forget(event.getEntity().getUUID());
     }
 

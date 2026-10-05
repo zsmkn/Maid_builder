@@ -48,7 +48,7 @@ public final class MaidBuilderConfig {
         b.push("schematics");
         MAX_SCHEMATIC_VOLUME = b.comment("Largest schematic volume (x*y*z summed over regions) that will be loaded.")
                 .defineInRange("maxSchematicVolume", 256 * 256 * 384, 1, Integer.MAX_VALUE);
-        MAX_UPLOAD_BYTES = b.comment("Largest .litematic file (bytes) a client may upload to the server.")
+        MAX_UPLOAD_BYTES = b.comment("Largest schematic file (bytes) a client may upload to the server.")
                 .defineInRange("maxUploadBytes", 8 * 1024 * 1024, 1024, 256 * 1024 * 1024);
         MAX_PASTE_BLOCKS = b.comment("Largest number of blocks /maidbuilder paste places in one go.")
                 .defineInRange("maxPasteBlocks", 1_000_000, 1, Integer.MAX_VALUE);
