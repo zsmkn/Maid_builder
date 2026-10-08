@@ -1,0 +1,36 @@
+package com.maidbuilder.client;
+
+import net.minecraftforge.common.ForgeConfigSpec;
+
+/** Client-side settings (config/maidbuilder-client.toml); editable in game, also on servers. */
+public final class MaidBuilderClientConfig {
+    public static final ForgeConfigSpec SPEC;
+
+    public static final ForgeConfigSpec.BooleanValue SHOW_HUD;
+    public static final ForgeConfigSpec.DoubleValue GHOST_OPACITY;
+    public static final ForgeConfigSpec.IntValue PREVIEW_RENDER_DISTANCE;
+    public static final ForgeConfigSpec.BooleanValue SHOW_WRONG_BLOCKS;
+    public static final ForgeConfigSpec.BooleanValue SHOW_BOUNDING_BOX;
+    public static final ForgeConfigSpec.BooleanValue SHADER_OVERLAY;
+
+    static {
+        ForgeConfigSpec.Builder b = new ForgeConfigSpec.Builder();
+        SHOW_HUD = b.comment("Show the Blueprint Wand overlay (placement, progress, missing materials) in the top-left corner.")
+                .define("showHud", true);
+        GHOST_OPACITY = b.comment("Opacity of the ghost blocks of a placed schematic (1 = solid).")
+                .defineInRange("ghostOpacity", 0.45, 0.1, 1.0);
+        PREVIEW_RENDER_DISTANCE = b.comment("Parts of the preview farther away than this many blocks are not drawn.")
+                .defineInRange("previewRenderDistance", 160, 16, 512);
+        SHOW_WRONG_BLOCKS = b.comment("Outline blocks in red where the world has a different block than the schematic.")
+                .define("showWrongBlocks", true);
+        SHOW_BOUNDING_BOX = b.comment("Draw a white box around the whole schematic.")
+                .define("showBoundingBox", true);
+        SHADER_OVERLAY = b.comment("With a shader pack (Oculus) active, draw the preview on top of the shaded image so the pack",
+                        "does not light it like real blocks. Turn off to let the pack shade the preview.")
+                .define("shaderOverlay", true);
+        SPEC = b.build();
+    }
+
+    private MaidBuilderClientConfig() {
+    }
+}

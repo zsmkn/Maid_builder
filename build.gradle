@@ -1,0 +1,9 @@
+// Root project: shared configuration only. See core/ and forge/.
+subprojects {
+    group = mod_group_id
+    version = mod_version
+
+    tasks.withType(JavaCompile).configureEach {
+        options.encoding = 'UTF-8'
+    }
+}

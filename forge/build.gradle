@@ -1,0 +1,146 @@
+plugins {
+    id 'java-library'
+    id 'net.neoforged.moddev.legacyforge' version '2.0.148'
+    id 'idea'
+}
+
+base {
+    archivesName = mod_id
+}
+
+// Mojang ships Java 17 to end users in 1.20.1.
+java.toolchain.languageVersion = JavaLanguageVersion.of(17)
+
+repositories {
+    exclusiveContent {
+        forRepository {
+            maven {
+                name = 'Modrinth'
+                url = 'https://api.modrinth.com/maven'
+            }
+        }
+        filter { includeGroup 'maven.modrinth' }
+    }
+}
+
+legacyForge {
+    version = "${minecraft_version}-${forge_version}"
+
+    parchment {
+        mappingsVersion = project.parchment_mappings_version
+        minecraftVersion = project.parchment_minecraft_version
+    }
+
+    runs {
+        client {
+            client()
+            systemProperty 'forge.enabledGameTestNamespaces', project.mod_id
+        }
+        server {
+            server()
+            programArgument '--nogui'
+            systemProperty 'forge.enabledGameTestNamespaces', project.mod_id
+        }
+        // Rendering smoke test: opens the world saves/selftest, shows a ghost preview, saves
+        // screenshots/maidbuilder_selftest.png and quits. Needs a world named "selftest".
+        clientSelfTest {
+            client()
+            programArguments.addAll '--quickPlaySingleplayer', 'selftest'
+            systemProperty 'maidbuilder.selftest', 'true'
+        }
+        // Same smoke test with shaders: run with -PshaderTest=true so Oculus + Embeddium are put on the
+        // (remapped) runtime classpath; its own game directory (runs/shaders) holds shaderpacks/ and
+        // config/oculus.properties picking the pack. Nothing is added to the mod's dependencies.
+        clientShaderTest {
+            client()
+            programArguments.addAll '--quickPlaySingleplayer', 'selftest'
+            systemProperty 'maidbuilder.selftest', 'true'
+        }
+        // Network smoke test: joins a dedicated server on localhost (start runServer first; the player
+        // "Dev" must be an operator), uploads a schematic, links a job, downloads a capture, then stops
+        // the server and quits.
+        // Uses its own game directory so the server never finds the schematic on disk.
+        clientNetTest {
+            client()
+            programArguments.addAll '--quickPlayMultiplayer', '127.0.0.1:25565'
+            systemProperty 'maidbuilder.nettest', 'true'
+            // -PnettestReload=true: second pass after a server restart (lists the jobs)
+            systemProperty 'maidbuilder.nettest.reload', (project.findProperty('nettestReload') ?: 'false').toString()
+        }
+        // Runs all maidbuilder game tests, then exits (non-zero on failure).
+        gameTestServer {
+            type = 'gameTestServer'
+            systemProperty 'forge.enabledGameTestNamespaces', project.mod_id
+        }
+        configureEach {
+            gameDirectory = project.file(name == 'clientShaderTest' ? 'runs/shaders' : name == 'clientNetTest' ? 'runs/nettest' : 'run')
+            systemProperty 'forge.logging.markers', 'REGISTRIES'
+            logLevel = org.slf4j.event.Level.DEBUG
+        }
+    }
+
+    mods {
+        "${mod_id}" {
+            sourceSet(sourceSets.main)
+            // core classes are shipped inside the mod jar, so they belong to the same mod at dev time
+            sourceSet(project(':core').sourceSets.main)
+        }
+    }
+}
+
+configurations {
+    runtimeClasspath.extendsFrom localRuntime
+}
+obfuscation {
+    createRemappingConfiguration(configurations.localRuntime)
+}
+
+dependencies {
+    implementation project(':core')
+    // Forge mod jars are SRG-named and must be remapped for the dev environment.
+    modImplementation "maven.modrinth:touhou-little-maid:${tlm_version}"
+    // Shader compatibility testing only (runClientShaderTest -PshaderTest=true); never published.
+    if (project.findProperty('shaderTest') == 'true') {
+        modLocalRuntime "maven.modrinth:oculus:${oculus_version}"
+        modLocalRuntime "maven.modrinth:embeddium:${embeddium_version}"
+    }
+}
+
+// Embed the core module's classes directly in the mod jar. The jar task writes the dev (Mojang
+// names) jar to build/devlibs; reobfJar writes the released (SRG names) jar to build/libs.
+tasks.named('jar', Jar) {
+    from(project(':core').sourceSets.main.output)
+}
+tasks.named('reobfJar', Jar) {
+    archiveFileName = "${mod_id}-release_${mod_version}_forge${minecraft_version}.jar"
+}
+
+var generateModMetadata = tasks.register('generateModMetadata', ProcessResources) {
+    var replaceProperties = [
+            minecraft_version      : minecraft_version,
+            minecraft_version_range: minecraft_version_range,
+            forge_version          : forge_version,
+            forge_version_range    : forge_version_range,
+            loader_version_range   : loader_version_range,
+            tlm_version_range      : tlm_version_range,
+            mod_id                 : mod_id,
+            mod_name               : mod_name,
+            mod_license            : mod_license,
+            mod_version            : mod_version,
+            mod_authors            : mod_authors,
+            mod_description        : mod_description,
+    ]
+    inputs.properties replaceProperties
+    expand replaceProperties
+    from 'src/main/templates'
+    into 'build/generated/sources/modMetadata'
+}
+sourceSets.main.resources.srcDir generateModMetadata
+legacyForge.ideSyncTask generateModMetadata
+
+idea {
+    module {
+        downloadSources = true
+        downloadJavadoc = true
+    }
+}
