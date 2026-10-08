@@ -5,7 +5,7 @@ import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 import com.github.tartaricacid.touhoulittlemaid.init.InitEntities;
 import com.google.common.collect.ImmutableMap;
 import com.maidbuilder.MaidBuilderConfig;
-import com.maidbuilder.common.BlockPlacer;
+import com.maidbuilder.common.BlockBreaker;
 import com.maidbuilder.common.job.BuildJob;
 import com.maidbuilder.common.job.BuildJobManager;
 import net.minecraft.core.BlockPos;
@@ -16,6 +16,7 @@ import net.minecraft.world.entity.ai.memory.MemoryModuleType;
 import net.minecraft.world.entity.ai.memory.MemoryStatus;
 import net.minecraft.world.entity.ai.memory.WalkTarget;
 import net.minecraft.world.item.Item;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 
 import java.util.List;
@@ -105,12 +106,23 @@ public class BuilderFindTargetTask extends MaidCheckRateTask {
         boolean homeMode = maid.isHomeModeEnable();
         double ownerRange = MaidBuilderConfig.OWNER_RANGE_WITHOUT_HOME.get();
         AABB self = maid.getBoundingBox();
+        BlockPos footing = maid.getOnPos();
+        job.sweepClear(level, CLEAR_SWEEP);
         return job.findBest(level.getGameTime(), i -> {
             BlockPos pos = job.pos(i);
             if (!level.isLoaded(pos)) return false;
-            if (BlockPlacer.matches(level.getBlockState(pos), job.target(i))) {
+            BlockState state = level.getBlockState(pos);
+            if (job.isSatisfied(i, state)) {
                 job.setStatus(i, BuildJob.DONE);
                 return false;
+            }
+            if (job.isClearStep(i)) {
+                BlockPos primary = BlockBreaker.primaryPos(level, pos);
+                if (!BlockBreaker.breakable(level, primary, level.getBlockState(primary))) {
+                    job.setStatus(i, BuildJob.NEEDS_PLAYER); // a chest, bedrock...: no use walking there
+                    return false;
+                }
+                if (primary.equals(footing)) return false;
             }
             if (!homeMode && (owner == null || !pos.closerToCenterThan(owner.position(), ownerRange))) return false;
             if (self.intersects(new AABB(pos)) || job.isScaffold(pos) || session.isDeferred(i, gameTime)) return false;
@@ -127,6 +139,8 @@ public class BuilderFindTargetTask extends MaidCheckRateTask {
         return s;
     }
 
+    /** Clear steps checked per search for cells that are empty already. */
+    private static final int CLEAR_SWEEP = 4096;
     private static final int CROWD_DISTANCE = 3;
     private static final double CROWD_PENALTY = 64;
 }

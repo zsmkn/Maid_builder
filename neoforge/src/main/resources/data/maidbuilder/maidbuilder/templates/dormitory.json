@@ -1,0 +1,8 @@
+{
+  "structure": "maidbuilder:dormitory",
+  "category": "housing",
+  "required_level": 2,
+  "prosperity": 20,
+  "icon": "minecraft:red_bed",
+  "order": 6
+}

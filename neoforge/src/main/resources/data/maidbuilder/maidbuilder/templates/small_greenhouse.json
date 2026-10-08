@@ -1,0 +1,19 @@
+{
+  "structure": "maidbuilder:small_greenhouse",
+  "category": "production",
+  "group": "greenhouse",
+  "required_level": 1,
+  "prosperity": 12,
+  "bonus": "greenhouse",
+  "icon": "minecraft:wheat",
+  "order": 2,
+  "workplace": {
+    "task": "touhou_little_maid:farm",
+    "max_maids": 2,
+    "products": [
+      "#c:crops",
+      "#c:seeds"
+    ],
+    "keep": 16
+  }
+}

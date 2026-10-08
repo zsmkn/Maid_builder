@@ -89,4 +89,59 @@ class BuildPlannerTest {
         assertEquals(BuildPhase.ATTACHED, BlockCategories.phaseOf(BlockStateData.of("minecraft:poppy")));
         assertEquals(BuildPhase.GRAVITY_AND_FLUIDS, BlockCategories.phaseOf(BlockStateData.of("minecraft:lime_concrete_powder")));
     }
+
+    /** 21x3x21 of air with one block in the middle of the second layer. */
+    private static Schematic lonePost() {
+        LitematicWriter.RegionBuilder rb = new LitematicWriter.RegionBuilder("post", IntPos.ZERO, new IntPos(21, 3, 21));
+        rb.set(10, 1, 10, "minecraft:stone");
+        return LitematicWriter.schematic("post", 3955, List.of(rb.build()));
+    }
+
+    @Test
+    void noClearStepsUnlessEnabled() {
+        assertFalse(BuildPlanner.plan(lonePost(), Placement.at(IntPos.ZERO), new BuildPlanner.Options(true)).steps().stream()
+                .anyMatch(s -> s.phase() == BuildPhase.CLEAR));
+        assertEquals(BuildPlanner.plan(hut(), Placement.at(IntPos.ZERO)).steps(),
+                BuildPlanner.plan(hut(), Placement.at(IntPos.ZERO), new BuildPlanner.Options(false, 0)).steps());
+    }
+
+    @Test
+    void clearsAirWithinCircleOnSameLayerOnly() {
+        BuildPlan plan = BuildPlanner.plan(lonePost(), Placement.at(new IntPos(100, 64, 100)), new BuildPlanner.Options(false, 5));
+        List<BuildStep> clear = plan.steps().stream().filter(s -> s.phase() == BuildPhase.CLEAR).toList();
+        // lattice points with dx^2 + dz^2 <= 25, minus the post itself
+        assertEquals(80, clear.size());
+        for (BuildStep s : clear) {
+            assertEquals(65, s.worldPos().y(), "only the layer that has a block: " + s);
+            int dx = s.worldPos().x() - 110, dz = s.worldPos().z() - 110;
+            assertTrue(dx * dx + dz * dz <= 25, s.toString());
+            assertTrue(s.schematicState().isAir() && s.worldState().isAir());
+        }
+        assertTrue(clear.stream().anyMatch(s -> s.worldPos().equals(new IntPos(115, 65, 110))));
+        assertTrue(clear.stream().anyMatch(s -> s.worldPos().equals(new IntPos(113, 65, 114))));
+        assertFalse(clear.stream().anyMatch(s -> s.worldPos().equals(new IntPos(114, 65, 114))), "corner of the square is outside the circle");
+        assertEquals(1, plan.steps().stream().filter(s -> s.phase() != BuildPhase.CLEAR).count());
+    }
+
+    @Test
+    void clearStepsComeFirstTopDownAndSkipBlocks() {
+        BuildPlan plan = BuildPlanner.plan(hut(), Placement.at(IntPos.ZERO).withRotation(Rotation.CLOCKWISE_90),
+                new BuildPlanner.Options(false, 5));
+        List<BuildStep> steps = plan.steps();
+        int firstBuild = 0;
+        while (steps.get(firstBuild).phase() == BuildPhase.CLEAR) firstBuild++;
+        assertTrue(firstBuild > 0);
+        for (int i = firstBuild; i < steps.size(); i++) assertTrue(steps.get(i).phase() != BuildPhase.CLEAR);
+        for (int i = 1; i < firstBuild; i++) {
+            assertTrue(steps.get(i - 1).worldPos().y() >= steps.get(i).worldPos().y(), "top down");
+        }
+        // every cell of the 3x3x3 box that holds no block (incl. door top, bed head, skipped water and fire)
+        java.util.Set<IntPos> cleared = new java.util.HashSet<>();
+        steps.subList(0, firstBuild).forEach(s -> cleared.add(s.worldPos()));
+        assertEquals(firstBuild, cleared.size(), "no duplicates");
+        // the box holds 27 cells, 19 of them blocks (counting door top, bed head, water and fire)
+        assertEquals(27 - 19, firstBuild);
+        assertEquals(BuildPlanner.plan(hut(), Placement.at(IntPos.ZERO).withRotation(Rotation.CLOCKWISE_90)).size(),
+                steps.size() - firstBuild, "building steps unchanged");
+    }
 }

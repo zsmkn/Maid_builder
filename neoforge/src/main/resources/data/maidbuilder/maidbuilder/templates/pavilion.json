@@ -1,0 +1,8 @@
+{
+  "structure": "maidbuilder:pavilion",
+  "category": "decoration",
+  "required_level": 5,
+  "prosperity": 40,
+  "icon": "minecraft:lantern",
+  "order": 10
+}

@@ -9,6 +9,7 @@ import com.maidbuilder.common.StateResolver;
 import com.maidbuilder.common.job.BuildJob;
 import com.maidbuilder.common.job.BuildJobData;
 import com.maidbuilder.common.job.BuildJobFactory;
+import com.maidbuilder.common.job.ClearMode;
 import com.maidbuilder.item.WandPlacement;
 import com.maidbuilder.common.job.BuildJobManager;
 import com.maidbuilder.common.maid.WandInteractHandler;
@@ -24,6 +25,7 @@ import com.maidbuilder.init.ModItems;
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.StringReader;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.ArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
@@ -98,6 +100,7 @@ public final class MaidBuilderCommand {
                                 .then(Commands.argument("from", BlockPosArgument.blockPos())
                                         .then(Commands.argument("to", BlockPosArgument.blockPos())
                                                 .executes(MaidBuilderCommand::save)))))
+                .then(TerritoryCommand.build())
                 .then(Commands.literal("job")
                         .then(placementArguments(Commands.literal("create"), MaidBuilderCommand::createJob))
                         .then(Commands.literal("list").executes(MaidBuilderCommand::listJobs))
@@ -106,6 +109,11 @@ public final class MaidBuilderCommand {
                             return Command.SINGLE_SUCCESS;
                         })))
                         .then(Commands.literal("retry").then(jobArgument().executes(MaidBuilderCommand::retryJob)))
+                        .then(Commands.literal("clearing").then(jobArgument().executes(MaidBuilderCommand::showClearing)
+                                .then(Commands.argument("mode", StringArgumentType.word()).suggests(CLEAR_MODES)
+                                        .executes(ctx -> setClearing(ctx, null))
+                                        .then(Commands.argument("radius", IntegerArgumentType.integer(1, 16))
+                                                .executes(ctx -> setClearing(ctx, IntegerArgumentType.getInteger(ctx, "radius")))))))
                         .then(Commands.literal("remove").then(jobArgument().executes(MaidBuilderCommand::removeJob)))
                         .then(Commands.literal("wand").then(jobArgument().executes(MaidBuilderCommand::giveWand)))
                         .then(Commands.literal("bind").then(jobArgument()
@@ -262,6 +270,7 @@ public final class MaidBuilderCommand {
                 job.shortId(), job.schematicName(), job.origin().toShortString(), job.rotation().getSerializedName(),
                 job.mirror().getSerializedName(), job.count(BuildJob.DONE), job.size(),
                 job.count(BuildJob.NEEDS_PLAYER), job.count(BuildJob.FAILED)), false);
+        sendClearing(source, job);
         if (!job.materialSources().isEmpty()) {
             source.sendSuccess(() -> Component.translatable("command.maidbuilder.job.sources", job.materialSources().size(),
                     String.join(", ", job.materialSources().stream().map(BlockPos::toShortString).toList())), false);
@@ -283,6 +292,36 @@ public final class MaidBuilderCommand {
         if (sorted.size() > TOP_MATERIALS) {
             source.sendSuccess(() -> Component.translatable("command.maidbuilder.materials.more", sorted.size() - TOP_MATERIALS), false);
         }
+    }
+
+    private static final SuggestionProvider<CommandSourceStack> CLEAR_MODES = (ctx, builder) ->
+            SharedSuggestionProvider.suggest(java.util.Arrays.stream(ClearMode.values()).map(m -> m.name().toLowerCase(java.util.Locale.ROOT)), builder);
+
+    private static void sendClearing(CommandSourceStack source, BuildJob job) {
+        source.sendSuccess(() -> Component.translatable("command.maidbuilder.job.clearing",
+                Component.translatable("clear_mode.maidbuilder." + job.clearMode().name().toLowerCase(java.util.Locale.ROOT)),
+                job.clearRadius(), job.clearRemaining()), false);
+    }
+
+    private static int showClearing(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
+        BuildJob job = job(ctx, false);
+        sendClearing(ctx.getSource(), job);
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int setClearing(CommandContext<CommandSourceStack> ctx, @javax.annotation.Nullable Integer radius) throws CommandSyntaxException {
+        BuildJob job = job(ctx, true);
+        String name = StringArgumentType.getString(ctx, "mode");
+        ClearMode mode = java.util.Arrays.stream(ClearMode.values()).filter(m -> m.name().equalsIgnoreCase(name)).findFirst()
+                .orElseThrow(() -> new SimpleCommandExceptionType(Component.translatable("command.maidbuilder.job.clearing.bad_mode", name)).create());
+        int r = radius != null ? radius : job.clearRadius() > 0 ? job.clearRadius() : MaidBuilderConfig.CLEAR_RADIUS.get();
+        try {
+            job.setClearing(mode, r, ctx.getSource().getServer());
+        } catch (IOException e) {
+            throw error("command.maidbuilder.file_error", job.schematicName(), e.getMessage());
+        }
+        sendClearing(ctx.getSource(), job);
+        return Command.SINGLE_SUCCESS;
     }
 
     private static int retryJob(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {

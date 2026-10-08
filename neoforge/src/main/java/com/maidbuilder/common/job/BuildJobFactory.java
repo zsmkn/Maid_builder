@@ -18,6 +18,7 @@ public final class BuildJobFactory {
                                   Rotation rotation, Mirror mirror) throws IOException {
         BuildJob job = new BuildJob(UUID.randomUUID(), owner.getUUID(), owner.getGameProfile().getName(), schematicName,
                 hash, owner.serverLevel().dimension(), origin, rotation, mirror, MaidBuilderConfig.PLACE_FLUIDS.get(), null);
+        job.useDefaultClearing();
         job.ensureLoaded(owner.server);
         BuildJobManager.data(owner.server).add(job);
         return job;

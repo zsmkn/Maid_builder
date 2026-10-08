@@ -89,7 +89,7 @@ public final class BuilderRangeHandler {
     private static double range(EntityMaid maid, BuildJob job) {
         Vec3 center = job.center();
         double range = Math.max(job.radius() + MaidBuilderConfig.WORK_AREA_MARGIN.get() + 2, maid.getRestrictRadius());
-        for (BlockPos source : job.materialSources()) {
+        for (BlockPos source : job.allMaterialSources(maid.getServer())) {
             range = Math.max(range, Math.sqrt(Vec3.atCenterOf(source).distanceToSqr(center)) + 3);
         }
         return range;

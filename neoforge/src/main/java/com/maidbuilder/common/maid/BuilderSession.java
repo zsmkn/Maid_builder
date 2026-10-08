@@ -15,6 +15,10 @@ final class BuilderSession {
     long nextPlaceTime;
     /** Set while the scaffold or teardown task controls the maid. */
     boolean busy;
+    /** Block she is breaking (null if none) and the ticks of work put into it so far. */
+    @javax.annotation.Nullable
+    net.minecraft.core.BlockPos breaking;
+    int breakProgress;
 
     /**
      * Steps this maid skips for a while for reasons of her own (no scaffolding, the column she needs

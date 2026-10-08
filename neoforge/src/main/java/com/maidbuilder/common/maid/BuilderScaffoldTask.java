@@ -39,7 +39,7 @@ import java.util.UUID;
  *   <li>picks a column next to the block ({@link ReachPlanner#planColumn}), reusing existing scaffolding;</li>
  *   <li>walks to its foot and stacks scaffolding from her inventory (like a player extending a column from below);</li>
  *   <li>climbs it (scaffolding is climbable: she jumps inside it);</li>
- *   <li>builds every block she has materials for within reach of the top;</li>
+ *   <li>builds every block she has materials for within reach of the top (breaking wrong ones on the way);</li>
  *   <li>if the next block in build order is out of reach but raising this column would reach it,
  *       she stacks more scaffolding from where she stands and climbs on (no trip down and up);</li>
  *   <li>otherwise sneaks to slide back down (sneaking entities fall through scaffolding).</li>
@@ -268,8 +268,7 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
         UUID id = maid.getUUID();
         int index = job.claimOf(id);
         if (index >= 0 && job.status(index) == BuildJob.PENDING && ReachPlanner.inReach(maid, job.pos(index))) {
-            BuilderPlaceTask.placeStep(level, maid, job, index);
-            job.release(id);
+            if (!BuilderPlaceTask.workStep(level, maid, job, index, session, WORK_INTERVAL)) job.release(id);
             return;
         }
         job.release(id);
@@ -346,6 +345,7 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
     @Override
     protected void stop(ServerLevel level, EntityMaid maid, long gameTime) {
         maid.setShiftKeyDown(false);
+        BuilderPlaceTask.stopBreaking(level, maid, session);
         maid.getBrain().eraseMemory(MemoryModuleType.WALK_TARGET);
         if (job != null) {
             job.release(maid.getUUID());
@@ -358,7 +358,7 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
 
     private static boolean containersHaveScaffolding(ServerLevel level, EntityMaid maid, BuildJob job) {
         double range = MaidBuilderConfig.MATERIAL_SOURCE_RANGE.get();
-        for (Map.Entry<BlockPos, IItemHandler> e : MaterialContainers.distinct(level, job.materialSources()).entrySet()) {
+        for (Map.Entry<BlockPos, IItemHandler> e : MaterialContainers.distinct(level, job.allMaterialSources(level.getServer())).entrySet()) {
             if (maid.distanceToSqr(Vec3.atCenterOf(e.getKey())) > range * range) continue;
             if (MaterialContainers.containsAny(e.getValue(), Map.of(Items.SCAFFOLDING, 1))) return true;
         }

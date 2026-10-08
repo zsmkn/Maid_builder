@@ -88,6 +88,7 @@ dependencies {
 // Embed the core module's classes directly in the mod jar.
 tasks.named('jar', Jar) {
     from(project(':core').sourceSets.main.output)
+    archiveFileName = "${mod_id}-release_${mod_version}_neoforge${minecraft_version}.jar"
 }
 
 var generateModMetadata = tasks.register('generateModMetadata', ProcessResources) {

@@ -1,0 +1,25 @@
+{
+  "replace": false,
+  "values": [
+    "minecraft:spawner",
+    "minecraft:trial_spawner",
+    "minecraft:vault",
+    "minecraft:budding_amethyst",
+    "minecraft:end_portal_frame",
+    "minecraft:reinforced_deepslate",
+    "minecraft:nether_portal",
+    "minecraft:end_portal",
+    "minecraft:end_gateway",
+    "minecraft:dragon_egg",
+    "minecraft:respawn_anchor",
+    "minecraft:infested_stone",
+    "minecraft:infested_cobblestone",
+    "minecraft:infested_stone_bricks",
+    "minecraft:infested_mossy_stone_bricks",
+    "minecraft:infested_cracked_stone_bricks",
+    "minecraft:infested_chiseled_stone_bricks",
+    "minecraft:infested_deepslate",
+    "#minecraft:beds",
+    "#minecraft:shulker_boxes"
+  ]
+}

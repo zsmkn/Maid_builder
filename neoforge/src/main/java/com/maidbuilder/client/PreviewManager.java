@@ -3,6 +3,8 @@ package com.maidbuilder.client;
 import com.maidbuilder.MaidBuilder;
 import com.maidbuilder.client.preview.GhostPreview;
 import com.maidbuilder.client.preview.ShaderCompat;
+import com.maidbuilder.client.territory.BuildMode;
+import com.maidbuilder.client.territory.TerritoryKeys;
 import com.maidbuilder.init.ModDataComponents;
 import com.maidbuilder.init.ModItems;
 import com.maidbuilder.item.WandPlacement;
@@ -37,6 +39,7 @@ public final class PreviewManager {
     private static GhostPreview current;
     @Nullable
     private static WandPlacement pendingKey;
+    private static int pendingClearRadius;
     @Nullable
     private static String loadError;
     /** Placement whose file could not be loaded; not retried until the placement changes. */
@@ -78,18 +81,32 @@ public final class PreviewManager {
             clear();
             return;
         }
-        if (ClientSelfTest.tick(mc)) return;
-        ItemStack wand = heldWand(player);
-        WandPlacement placement = wand == null ? null : wand.get(ModDataComponents.WAND_PLACEMENT.get());
+        if (ClientSelfTest.tick(mc) && !BuildMode.active()) return;
+        while (TerritoryKeys.BUILD_MODE.consumeClick()) {
+            if (mc.screen == null) BuildMode.onBuildKey(mc);
+        }
+        boolean building = BuildMode.active();
+        ItemStack wand = building ? null : heldWand(player);
+        WandPlacement placement;
+        if (building) {
+            BuildMode.tick(mc);
+            placement = BuildMode.placement();
+        } else {
+            placement = wand == null ? null : wand.get(ModDataComponents.WAND_PLACEMENT.get());
+        }
         handleKeys(wand, placement);
         if (placement == null) {
             clear();
             return;
         }
-        if ((current == null || !current.placement.equals(placement)) && !placement.equals(failedKey)) {
-            requestPreview(placement);
+        int clearRadius = clearRadius(wand, placement);
+        if ((current == null || !current.placement.equals(placement) || current.clearRadius != clearRadius) && !placement.equals(failedKey)) {
+            requestPreview(placement, clearRadius);
         }
-        if (current != null) current.tick(mc.level, SCAN_BUDGET);
+        if (current != null) {
+            current.setInvalid(building && BuildMode.problem() != null);
+            current.tick(mc.level, SCAN_BUDGET);
+        }
     }
 
     /** Wand keys move the placement; held with the Blueprint Quill instead, up/down resize its box. */
@@ -98,7 +115,9 @@ public final class PreviewManager {
         boolean quill = wand == null && player != null && QuillClient.heldQuill(player) != null;
         for (KeyMapping key : WandKeys.ALL) {
             while (key.consumeClick()) {
-                if (wand != null && placement != null && !wand.has(ModDataComponents.BUILD_JOB.get())) {
+                if (BuildMode.active()) {
+                    BuildMode.adjust(key);
+                } else if (wand != null && placement != null && !wand.has(ModDataComponents.BUILD_JOB.get())) {
                     PacketDistributor.sendToServer(new Payloads.AdjustPlacement(WandKeys.ACTIONS.get(key)));
                 } else if (quill && (key == WandKeys.UP || key == WandKeys.DOWN)) {
                     PacketDistributor.sendToServer(new Payloads.QuillAdjust(key == WandKeys.UP, QuillClient.step()));
@@ -106,7 +125,11 @@ public final class PreviewManager {
             }
         }
         while (WandKeys.MATERIALS.consumeClick()) {
-            if (wand != null) openMaterials(wand, placement);
+            if (BuildMode.active()) {
+                if (current != null) Minecraft.getInstance().setScreen(MaterialListScreen.forPreview());
+            } else if (wand != null) {
+                openMaterials(wand, placement);
+            }
         }
     }
 
@@ -114,7 +137,7 @@ public final class PreviewManager {
     private static void openMaterials(ItemStack wand, @Nullable WandPlacement placement) {
         Minecraft mc = Minecraft.getInstance();
         if (wand.has(ModDataComponents.BUILD_JOB.get())) {
-            PacketDistributor.sendToServer(new Payloads.RequestMaterialReport(true));
+            PacketDistributor.sendToServer(new Payloads.RequestMaterialReport(java.util.Optional.empty(), true));
         } else if (placement == null) {
             if (mc.player != null) mc.player.displayClientMessage(Component.translatable("message.maidbuilder.wand.select_first"), true);
         } else {
@@ -122,17 +145,36 @@ public final class PreviewManager {
         }
     }
 
-    private static void requestPreview(WandPlacement placement) {
-        if (placement.equals(pendingKey)) return;
+    /**
+     * How far the previewed placement would clear the schematic's air: a linked wand's job says so
+     * itself; anything else would become a new job with the server's setting.
+     */
+    private static int clearRadius(@Nullable ItemStack wand, WandPlacement placement) {
+        java.util.UUID job = wand == null ? null : wand.get(ModDataComponents.BUILD_JOB.get());
+        if (job == null) return ClientPayloadHandler.defaultAirRadius();
+        Payloads.JobStatus status = ClientPayloadHandler.status(job);
+        if (status != null) return status.clearRadius();
+        // the job's status arrives a moment after the wand is taken in hand: keep what is shown
+        return current != null && current.placement.equals(placement) ? current.clearRadius : 0;
+    }
+
+    private static void requestPreview(WandPlacement placement, int clearRadius) {
+        if (placement.equals(pendingKey) && clearRadius == pendingClearRadius) return;
+        boolean template = placement.file().startsWith(BuildMode.FILE_PREFIX);
+        // a template follows the crosshair: build one preview at a time, the latest position wins
+        if (template && pendingKey != null) return;
+        ClientSchematics.Loaded templateFile = template ? BuildMode.loaded() : null;
+        if (template && templateFile == null) return;
         pendingKey = placement;
+        pendingClearRadius = clearRadius;
         Minecraft mc = Minecraft.getInstance();
-        ClientSchematics.load(placement.file())
+        (template ? java.util.concurrent.CompletableFuture.completedFuture(templateFile) : ClientSchematics.load(placement.file()))
                 .thenApplyAsync(loaded -> {
                     fileChanged = !loaded.sha1().equals(placement.sha1());
-                    return GhostPreview.create(loaded.schematic(), placement);
+                    return GhostPreview.create(loaded.schematic(), placement, clearRadius);
                 }, Util.backgroundExecutor())
                 .whenCompleteAsync((preview, error) -> {
-                    if (!placement.equals(pendingKey)) {
+                    if (!placement.equals(pendingKey) && !template) {
                         if (preview != null) preview.close();
                         return;
                     }
@@ -182,5 +224,7 @@ public final class PreviewManager {
         clear();
         ClientPayloadHandler.clear();
         ClientSchematics.clear();
+        com.maidbuilder.client.territory.ClientTerritories.clear();
+        BuildMode.stop();
     }
 }

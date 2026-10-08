@@ -115,6 +115,13 @@ public final class WandActions {
         try {
             BuildJob job = BuildJobFactory.create(player, placement.file(), hash, placement.origin(), placement.rotation(), placement.mirror());
             wand.set(ModDataComponents.BUILD_JOB.get(), job.id());
+            // inside one's own territory the job joins its queue (built by its builders, from its containers)
+            var territory = com.maidbuilder.common.territory.TerritoryManager.activeAt(player.server, player.level().dimension(), placement.origin());
+            if (territory != null && territory.isOwnedBy(player.getUUID())) {
+                job.setTerritory(territory.id(), null, null);
+                territory.enqueue(job.id());
+                player.sendSystemMessage(Component.translatable("message.maidbuilder.wand.queued_in_territory"));
+            }
             player.sendSystemMessage(Component.translatable("message.maidbuilder.wand.job_created", job.shortId(), placement.file(), job.size()));
         } catch (IOException e) {
             MaidBuilder.LOGGER.warn("Cannot create build job from {}", placement.file(), e);

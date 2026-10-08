@@ -21,7 +21,8 @@ public final class MaidBuilderClientConfig {
                 .defineInRange("ghostOpacity", 0.45, 0.1, 1.0);
         PREVIEW_RENDER_DISTANCE = b.comment("Parts of the preview farther away than this many blocks are not drawn.")
                 .defineInRange("previewRenderDistance", 160, 16, 512);
-        SHOW_WRONG_BLOCKS = b.comment("Outline blocks in red where the world has a different block than the schematic.")
+        SHOW_WRONG_BLOCKS = b.comment("Outline blocks in red where the world has a different block than the schematic, and in orange",
+                        "the blocks the maids would clear from the schematic's air (when the server clears air).")
                 .define("showWrongBlocks", true);
         SHOW_BOUNDING_BOX = b.comment("Draw a white box around the whole schematic.")
                 .define("showBoundingBox", true);

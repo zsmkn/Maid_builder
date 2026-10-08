@@ -75,6 +75,14 @@ public final class MaterialRules {
         return List.of();
     }
 
+    /**
+     * Whether the block has a fixed item that wins over the block's own item, e.g. farmland and dirt
+     * paths are built from dirt (their own items cannot be obtained in survival).
+     */
+    public static boolean hasItemOverride(BlockStateData s) {
+        return ITEM_OVERRIDES.containsKey(s.name());
+    }
+
     /** Name-based guess of the base item id, without access to the game registry. */
     public static String itemFor(BlockStateData s) {
         String override = ITEM_OVERRIDES.get(s.name());

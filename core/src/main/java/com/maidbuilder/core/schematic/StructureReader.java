@@ -83,7 +83,7 @@ public final class StructureReader {
         }
 
         SchematicRegion region = new SchematicRegion("structure", IntPos.ZERO, size, palette, blocks, blockEntities,
-                new NbtList(NbtType.COMPOUND));
+                new NbtList(NbtType.COMPOUND), 0);
         int nonAir = (int) Math.min(Integer.MAX_VALUE, region.countNonAir());
         SchematicMetadata metadata = new SchematicMetadata("", root.getString("author"), "", size, nonAir,
                 (int) Math.min(Integer.MAX_VALUE, volume), 1, 0, 0);

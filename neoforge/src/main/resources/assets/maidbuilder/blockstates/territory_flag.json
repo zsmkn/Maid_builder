@@ -1,0 +1,8 @@
+{
+  "variants": {
+    "facing=north": { "model": "maidbuilder:block/territory_flag" },
+    "facing=east": { "model": "maidbuilder:block/territory_flag", "y": 90 },
+    "facing=south": { "model": "maidbuilder:block/territory_flag", "y": 180 },
+    "facing=west": { "model": "maidbuilder:block/territory_flag", "y": 270 }
+  }
+}

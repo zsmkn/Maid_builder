@@ -1,0 +1,15 @@
+{
+  "structure": "maidbuilder:sugar_cane_farm",
+  "category": "production",
+  "required_level": 1,
+  "prosperity": 5,
+  "icon": "minecraft:sugar_cane",
+  "order": 1,
+  "workplace": {
+    "task": "touhou_little_maid:sugar_cane",
+    "max_maids": 1,
+    "products": [
+      "minecraft:sugar_cane"
+    ]
+  }
+}

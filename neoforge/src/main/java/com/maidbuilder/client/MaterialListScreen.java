@@ -123,7 +123,7 @@ public class MaterialListScreen extends Screen {
 
     private void refresh() {
         if (job != null) {
-            PacketDistributor.sendToServer(new Payloads.RequestMaterialReport(false));
+            PacketDistributor.sendToServer(new Payloads.RequestMaterialReport(java.util.Optional.of(job), false));
         } else {
             rows = previewRows();
             refill();

@@ -1,0 +1,10 @@
+{
+  "level": 2,
+  "radius": 56,
+  "prosperity": 30,
+  "required_buildings": [ { "group": "warehouse" } ],
+  "upgrade_items": { "#minecraft:logs": 64, "minecraft:iron_ingot": 16 },
+  "resident_points": 3,
+  "resident_cap": 4,
+  "bonuses": [ "maid_regen" ]
+}

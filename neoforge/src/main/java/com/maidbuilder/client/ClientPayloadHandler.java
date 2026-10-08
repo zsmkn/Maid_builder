@@ -13,6 +13,8 @@ public final class ClientPayloadHandler {
     @Nullable
     private static Payloads.JobStatus lastStatus;
     private static long lastStatusTime;
+    /** How far jobs created now clear the schematic's air (from the server; 0 until told). */
+    private static int defaultAirRadius;
 
     private ClientPayloadHandler() {
     }
@@ -40,6 +42,14 @@ public final class ClientPayloadHandler {
         lastStatusTime = System.currentTimeMillis();
     }
 
+    public static void onClearSettings(Payloads.ClearSettings settings) {
+        defaultAirRadius = settings.airRadius();
+    }
+
+    public static int defaultAirRadius() {
+        return defaultAirRadius;
+    }
+
     /** Refreshes an open material screen of the same job, or opens one when asked to. */
     public static void onMaterialReport(Payloads.MaterialReport report) {
         Minecraft mc = Minecraft.getInstance();
@@ -59,5 +69,6 @@ public final class ClientPayloadHandler {
 
     public static void clear() {
         lastStatus = null;
+        defaultAirRadius = 0;
     }
 }

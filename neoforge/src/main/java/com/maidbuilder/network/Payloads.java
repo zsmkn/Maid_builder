@@ -100,10 +100,12 @@ public final class Payloads {
     /**
      * Server -> client: progress of the job linked to the wand the player holds.
      *
+     * @param toClear clear steps (cells of the schematic's air) still to check or break
+     * @param clearRadius how far the job clears the schematic's air (0: not at all), for the preview
      * @param missing items still needed that are neither in the material containers nor in the maids' reach
      */
-    public record JobStatus(UUID job, String name, int done, int total, int needsPlayer, int failed,
-                            int sources, int maids, List<ItemCount> missing) implements CustomPacketPayload {
+    public record JobStatus(UUID job, String name, int done, int total, int needsPlayer, int failed, int toClear,
+                            int clearRadius, int sources, int maids, List<ItemCount> missing) implements CustomPacketPayload {
         public static final Type<JobStatus> TYPE = payloadType("job_status");
         public static final StreamCodec<RegistryFriendlyByteBuf, JobStatus> CODEC = StreamCodec.of(
                 (buf, s) -> {
@@ -113,16 +115,30 @@ public final class Payloads {
                     buf.writeVarInt(s.total());
                     buf.writeVarInt(s.needsPlayer());
                     buf.writeVarInt(s.failed());
+                    buf.writeVarInt(s.toClear());
+                    buf.writeVarInt(s.clearRadius());
                     buf.writeVarInt(s.sources());
                     buf.writeVarInt(s.maids());
                     ItemCount.CODEC.apply(ByteBufCodecs.list(64)).encode(buf, s.missing());
                 },
                 buf -> new JobStatus(UUIDUtil.STREAM_CODEC.decode(buf), ByteBufCodecs.STRING_UTF8.decode(buf),
                         buf.readVarInt(), buf.readVarInt(), buf.readVarInt(), buf.readVarInt(), buf.readVarInt(), buf.readVarInt(),
-                        ItemCount.CODEC.apply(ByteBufCodecs.list(64)).decode(buf)));
+                        buf.readVarInt(), buf.readVarInt(), ItemCount.CODEC.apply(ByteBufCodecs.list(64)).decode(buf)));
 
         @Override
         public Type<JobStatus> type() {
+            return TYPE;
+        }
+    }
+
+    /** Server -> client: how far jobs created now clear the schematic's air (0: not at all). */
+    public record ClearSettings(int airRadius) implements CustomPacketPayload {
+        public static final Type<ClearSettings> TYPE = payloadType("clear_settings");
+        public static final StreamCodec<RegistryFriendlyByteBuf, ClearSettings> CODEC = StreamCodec.of(
+                (buf, s) -> buf.writeVarInt(s.airRadius()), buf -> new ClearSettings(buf.readVarInt()));
+
+        @Override
+        public Type<ClearSettings> type() {
             return TYPE;
         }
     }
@@ -157,11 +173,13 @@ public final class Payloads {
         }
     }
 
-    /** Client -> server: send me the material list of the job linked to the wand I hold. */
-    public record RequestMaterialReport(boolean open) implements CustomPacketPayload {
+    /** Client -> server: send me the material list of this job, or (empty) of the job linked to the wand I hold. */
+    public record RequestMaterialReport(java.util.Optional<UUID> job, boolean open) implements CustomPacketPayload {
         public static final Type<RequestMaterialReport> TYPE = payloadType("request_material_report");
-        public static final StreamCodec<ByteBuf, RequestMaterialReport> CODEC = ByteBufCodecs.BOOL
-                .map(RequestMaterialReport::new, RequestMaterialReport::open);
+        public static final StreamCodec<ByteBuf, RequestMaterialReport> CODEC = StreamCodec.composite(
+                ByteBufCodecs.optional(UUIDUtil.STREAM_CODEC), RequestMaterialReport::job,
+                ByteBufCodecs.BOOL, RequestMaterialReport::open,
+                RequestMaterialReport::new);
 
         @Override
         public Type<RequestMaterialReport> type() {

@@ -37,8 +37,13 @@ public final class MaterialReports {
     private MaterialReports() {
     }
 
-    /** The player asked for the list of the job linked to the wand they hold. */
-    public static void onRequest(ServerPlayer player, boolean open) {
+    /** The player asked for the list of a job (one they may manage), or of the job linked to the wand they hold. */
+    public static void onRequest(ServerPlayer player, @Nullable UUID job, boolean open) {
+        if (job != null) {
+            BuildJob found = BuildJobManager.data(player.server).get(job);
+            if (found != null && mayView(player, found)) send(player, job, open);
+            return;
+        }
         ItemStack wand = WandActions.heldWand(player);
         if (wand == null) return;
         UUID jobId = wand.get(ModDataComponents.BUILD_JOB.get());
@@ -59,6 +64,13 @@ public final class MaterialReports {
         PacketDistributor.sendToPlayer(player, build(player.server.getLevel(job.dimension()), player.getInventory(), job, open));
     }
 
+    private static boolean mayView(ServerPlayer player, BuildJob job) {
+        if (job.owner().equals(player.getUUID()) || player.hasPermissions(2)) return true;
+        var territory = job.territoryId() == null ? null
+                : com.maidbuilder.common.territory.TerritoryManager.data(player.server).get(job.territoryId());
+        return territory != null && com.maidbuilder.common.territory.TerritoryManager.mayManage(player, territory);
+    }
+
     public static void forget(UUID player) {
         LAST_SENT.remove(player);
     }
@@ -75,9 +87,10 @@ public final class MaterialReports {
         Map<Item, Integer> inContainers = new HashMap<>();
         Map<Item, Integer> inMaids = new HashMap<>();
         int unloaded = 0, maids = 0;
+        List<BlockPos> sources = level == null ? job.materialSources() : job.allMaterialSources(level.getServer());
         if (level != null) {
-            for (BlockPos pos : job.materialSources()) if (!level.isLoaded(pos)) unloaded++;
-            for (IItemHandler handler : MaterialContainers.distinct(level, job.materialSources()).values()) {
+            for (BlockPos pos : sources) if (!level.isLoaded(pos)) unloaded++;
+            for (IItemHandler handler : MaterialContainers.distinct(level, sources).values()) {
                 MaterialContainers.count(handler, inContainers);
             }
             for (EntityMaid maid : boundMaids(level, job)) {
@@ -95,7 +108,7 @@ public final class MaterialReports {
                     inPlayer.getOrDefault(item, 0), inContainers.getOrDefault(item, 0), inMaids.getOrDefault(item, 0)));
         }
         return new Payloads.MaterialReport(open, job.id(), job.schematicName(), job.count(BuildJob.DONE), job.size(),
-                job.count(BuildJob.NEEDS_PLAYER), job.materialSources().size(), unloaded, maids, rows);
+                job.count(BuildJob.NEEDS_PLAYER), sources.size(), unloaded, maids, rows);
     }
 
     /** Maids in loaded chunks of the job's level that are bound to it. */

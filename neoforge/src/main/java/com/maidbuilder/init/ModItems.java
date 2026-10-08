@@ -3,6 +3,7 @@ package com.maidbuilder.init;
 import com.maidbuilder.MaidBuilder;
 import com.maidbuilder.item.BlueprintQuillItem;
 import com.maidbuilder.item.BlueprintWandItem;
+import com.maidbuilder.item.TerritoryFlagItem;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.CreativeModeTab;
@@ -21,12 +22,16 @@ public final class ModItems {
     public static final DeferredItem<BlueprintQuillItem> BLUEPRINT_QUILL =
             ITEMS.register("blueprint_quill", () -> new BlueprintQuillItem(new Item.Properties().stacksTo(1)));
 
+    public static final DeferredItem<TerritoryFlagItem> TERRITORY_FLAG =
+            ITEMS.register("territory_flag", () -> new TerritoryFlagItem(ModBlocks.TERRITORY_FLAG.get(), new Item.Properties().stacksTo(16)));
+
     public static final DeferredHolder<CreativeModeTab, CreativeModeTab> TAB = TABS.register("main", () -> CreativeModeTab.builder()
             .title(Component.translatable("itemGroup.maidbuilder"))
             .icon(() -> BLUEPRINT_WAND.get().getDefaultInstance())
             .displayItems((params, output) -> {
                 output.accept(BLUEPRINT_WAND.get());
                 output.accept(BLUEPRINT_QUILL.get());
+                output.accept(TERRITORY_FLAG.get());
             })
             .build());
 

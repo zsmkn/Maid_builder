@@ -1,0 +1,15 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": [
+    "GBG",
+    " S ",
+    " S "
+  ],
+  "key": {
+    "G": { "item": "minecraft:gold_ingot" },
+    "B": { "tag": "minecraft:banners" },
+    "S": { "item": "minecraft:stick" }
+  },
+  "result": { "count": 1, "id": "maidbuilder:territory_flag" }
+}

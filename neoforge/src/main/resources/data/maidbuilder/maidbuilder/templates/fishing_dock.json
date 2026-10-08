@@ -1,0 +1,16 @@
+{
+  "structure": "maidbuilder:fishing_dock",
+  "category": "production",
+  "required_level": 4,
+  "prosperity": 25,
+  "icon": "minecraft:fishing_rod",
+  "order": 9,
+  "workplace": {
+    "task": "touhou_little_maid:fishing",
+    "max_maids": 2,
+    "products": [
+      "#c:foods/raw_fish",
+      "#minecraft:fishes"
+    ]
+  }
+}
