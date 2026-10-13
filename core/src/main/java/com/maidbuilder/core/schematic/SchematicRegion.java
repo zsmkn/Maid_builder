@@ -22,9 +22,16 @@ public final class SchematicRegion {
     private final PackedBitArray blocks;
     private final Map<IntPos, NbtCompound> blockEntities;
     private final NbtList entities;
+    /** Palette index of positions the file leaves unspecified (structure void); -1 if every cell is specified. */
+    private final int voidId;
 
     public SchematicRegion(String name, IntPos position, IntPos rawSize, List<BlockStateData> palette,
                            PackedBitArray blocks, Map<IntPos, NbtCompound> blockEntities, NbtList entities) {
+        this(name, position, rawSize, palette, blocks, blockEntities, entities, -1);
+    }
+
+    public SchematicRegion(String name, IntPos position, IntPos rawSize, List<BlockStateData> palette,
+                           PackedBitArray blocks, Map<IntPos, NbtCompound> blockEntities, NbtList entities, int voidId) {
         this.name = name;
         this.position = position;
         this.rawSize = rawSize;
@@ -34,6 +41,7 @@ public final class SchematicRegion {
         this.blocks = blocks;
         this.blockEntities = Collections.unmodifiableMap(blockEntities);
         this.entities = entities;
+        this.voidId = voidId;
         if (blocks.size() != volume()) {
             throw new IllegalArgumentException("Block array size " + blocks.size() + " does not match region volume " + volume());
         }
@@ -132,6 +140,29 @@ public final class SchematicRegion {
                 }
             }
         }
+    }
+
+    /**
+     * Visits every cell the file explicitly stores as air (not structure void), with its position
+     * relative to the schematic origin, in y/z/x order.
+     */
+    public void forEachAir(AirVisitor visitor) {
+        boolean[] airIds = new boolean[palette.size()];
+        for (int i = 0; i < airIds.length; i++) airIds[i] = i != voidId && palette.get(i).isAir();
+        int sx = size.x(), sy = size.y(), sz = size.z();
+        long i = 0;
+        for (int y = 0; y < sy; y++) {
+            for (int z = 0; z < sz; z++) {
+                for (int x = 0; x < sx; x++, i++) {
+                    if (airIds[blocks.get(i)]) visitor.accept(minCorner.add(x, y, z));
+                }
+            }
+        }
+    }
+
+    @FunctionalInterface
+    public interface AirVisitor {
+        void accept(IntPos schematicPos);
     }
 
     @FunctionalInterface

@@ -1,0 +1,16 @@
+{
+  "structure": "maidbuilder:apiary",
+  "category": "production",
+  "required_level": 2,
+  "prosperity": 12,
+  "icon": "minecraft:beehive",
+  "order": 5,
+  "workplace": {
+    "task": "touhou_little_maid:honey",
+    "max_maids": 1,
+    "products": [
+      "minecraft:honeycomb",
+      "minecraft:honey_bottle"
+    ]
+  }
+}

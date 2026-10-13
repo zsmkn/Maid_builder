@@ -31,7 +31,9 @@ import java.util.List;
  * {@code screenshots/maidbuilder_selftest.png}, then opens the material list for it, saves
  * {@code screenshots/maidbuilder_selftest_materials.png}, then the settings screens
  * ({@code maidbuilder_selftest_config0..3.png}), a Blueprint Quill selecting a hut
- * ({@code maidbuilder_selftest_quill.png}) and closes the game.
+ * ({@code maidbuilder_selftest_quill.png}), a preview that clears the schematic's air
+ * ({@code maidbuilder_selftest_clear.png}: orange boxes on the dirt inside and just outside the
+ * house only) and closes the game.
  */
 final class ClientSelfTest {
     static final boolean ENABLED = Boolean.getBoolean("maidbuilder.selftest");
@@ -102,11 +104,54 @@ final class ClientSelfTest {
         }
         if (ticks == 230) shot(mc, "maidbuilder_selftest_quill.png");
         if (ticks == 232) quillScene(mc, false);
-        if (ticks == 240) mc.stop();
+        // Clearing preview: radius 3 around a house in a 13x4x13 box.
+        if (ticks == 240) {
+            BlockPos center = mc.player.blockPosition().relative(mc.player.getDirection(), 10);
+            clearOrigin = center.offset(-6, 0, -6);
+            clearScene(mc, true);
+            preview = GhostPreview.create(clearSample(), new WandPlacement("selftest_clear", "", clearOrigin, Rotation.NONE, Mirror.NONE), 3);
+        }
+        if (ticks == 270) {
+            MaidBuilder.LOGGER.info("[selftest] clearing preview: {} to clear (expected 2), {} wrong",
+                    preview.count(GhostPreview.TO_CLEAR), preview.count(GhostPreview.WRONG));
+            shot(mc, "maidbuilder_selftest_clear.png");
+        }
+        if (ticks == 272) {
+            clearScene(mc, false);
+            preview.close();
+            preview = null;
+        }
+        if (ticks >= 280 && TerritorySelfTest.tick(mc, ticks - 280)) mc.stop();
         return true;
     }
 
     private static ItemStack savedHand = ItemStack.EMPTY;
+    private static BlockPos clearOrigin = BlockPos.ZERO;
+
+    /**
+     * Puts (or removes) dirt where the clearing preview should and should not outline it: inside the
+     * house and 2 blocks outside its wall (outlined), 4 blocks outside (beyond the radius) and a chest
+     * within the radius (never broken).
+     */
+    private static void clearScene(Minecraft mc, boolean build) {
+        var server = mc.getSingleplayerServer();
+        if (server == null) return;
+        BlockPos o = clearOrigin;
+        server.execute(() -> {
+            var level = server.overworld();
+            for (BlockPos rel : List.of(new BlockPos(6, 1, 6), new BlockPos(10, 1, 6), new BlockPos(12, 1, 6))) {
+                level.setBlockAndUpdate(o.offset(rel), build ? Blocks.DIRT.defaultBlockState() : Blocks.AIR.defaultBlockState());
+            }
+            level.setBlockAndUpdate(o.offset(10, 1, 8), build ? Blocks.CHEST.defaultBlockState() : Blocks.AIR.defaultBlockState());
+        });
+    }
+
+    /** The sample house in the middle of a 13x4x13 box of air. */
+    private static Schematic clearSample() {
+        LitematicWriter.RegionBuilder rb = new LitematicWriter.RegionBuilder("box", IntPos.ZERO, new IntPos(13, 4, 13));
+        sample().regions().getFirst().forEachBlock((pos, state, local) -> rb.set(pos.x() + 4, pos.y(), pos.z() + 4, state));
+        return LitematicWriter.schematic("selftest_clear", 3955, List.of(rb.build()));
+    }
 
     /** Builds (or removes) a hut 5 blocks ahead on the server and selects it with a quill. */
     private static void quillScene(Minecraft mc, boolean build) {

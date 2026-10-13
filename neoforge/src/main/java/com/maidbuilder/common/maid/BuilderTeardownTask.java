@@ -29,11 +29,13 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Once the job is complete, the maid walks to each scaffolding column the builders put up and
- * takes it down from its foot (as breaking a column's bottom brings down the whole column),
- * keeping the scaffolding. A column she cannot reach after a few tries is left to the owner.
+ * takes it down from its foot (as breaking a column's bottom brings down the whole column, and
+ * with it the scaffolding hanging from it), keeping the scaffolding. A column she cannot reach
+ * after a few tries is left to the owner.
  */
 public class BuilderTeardownTask extends Behavior<EntityMaid> {
     private static final int CHECK_INTERVAL = 40;
@@ -65,7 +67,16 @@ public class BuilderTeardownTask extends Behavior<EntityMaid> {
         BuildJob j = found.get();
         if (ReachPlanner.columnAt(maid, j) != null) return false; // the scaffold task gets her down first
 
+        // scaffolding that is gone already (broken, or fell when its support went) needs no trip
+        for (BlockPos pos : List.copyOf(j.scaffolds())) {
+            if (level.isLoaded(pos) && !level.getBlockState(pos).is(Blocks.SCAFFOLDING)) j.removeScaffold(pos);
+        }
+        if (j.scaffolds().isEmpty()) return false;
         List<Map.Entry<Long, List<BlockPos>>> columns = new ArrayList<>(j.scaffoldColumns().entrySet());
+        // hanging scaffolding comes down with the column it hangs from; only if none is left are hanging ones visited
+        if (columns.stream().anyMatch(e -> ReachPlanner.grounded(level, e.getValue().getFirst()))) {
+            columns.removeIf(e -> !ReachPlanner.grounded(level, e.getValue().getFirst()));
+        }
         columns.sort(Comparator.comparingDouble(e -> maid.distanceToSqr(Vec3.atBottomCenterOf(e.getValue().getFirst()))));
         for (Map.Entry<Long, List<BlockPos>> e : columns) {
             if (j.claimColumn(e.getKey(), maid.getUUID())) {
@@ -118,13 +129,17 @@ public class BuilderTeardownTask extends Behavior<EntityMaid> {
 
     private void takeDown(ServerLevel level, EntityMaid maid, BuildJob job, List<BlockPos> column) {
         int taken = 0;
-        for (int i = column.size() - 1; i >= 0; i--) {
-            BlockPos pos = column.get(i);
+        for (int i = column.size() - 1; i >= 0; i--) job.removeScaffold(column.get(i));
+        // what hung from this column goes too, farthest first, before the column itself (so nothing falls)
+        List<BlockPos> loose = unsupported(level, job);
+        List<BlockPos> remove = new ArrayList<>(loose);
+        for (BlockPos pos : remove) job.removeScaffold(pos);
+        for (int i = column.size() - 1; i >= 0; i--) remove.add(column.get(i));
+        for (BlockPos pos : remove) {
             if (level.getBlockState(pos).is(Blocks.SCAFFOLDING)) {
                 level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
                 taken++;
             }
-            job.removeScaffold(pos);
         }
         if (taken > 0) {
             maid.swing(InteractionHand.MAIN_HAND);
@@ -140,6 +155,47 @@ public class BuilderTeardownTask extends Behavior<EntityMaid> {
                 notifyOwner(level, job, Component.translatable("message.maidbuilder.scaffold.cleared", job.schematicName()));
             }
         }
+    }
+
+    /**
+     * The job's scaffolding that nothing holds up any more: as in the game, a scaffold stands on
+     * something solid or on a held scaffold, or hangs at most {@link ReachPlanner#MAX_HANG} blocks
+     * sideways from one. Farthest from support first.
+     */
+    private static List<BlockPos> unsupported(ServerLevel level, BuildJob job) {
+        Set<BlockPos> cells = job.scaffolds();
+        Map<BlockPos, Integer> hang = new HashMap<>();
+        java.util.ArrayDeque<BlockPos> open = new java.util.ArrayDeque<>();
+        List<BlockPos> sorted = new ArrayList<>(cells);
+        sorted.sort(Comparator.comparingInt(BlockPos::getY));
+        for (BlockPos pos : sorted) {
+            if (!cells.contains(pos.below()) && ReachPlanner.grounded(level, pos)) {
+                hang.put(pos, 0);
+                open.add(pos);
+            }
+        }
+        // breadth first over "up" (same distance) and "sideways" (+1) until nothing improves
+        while (!open.isEmpty()) {
+            BlockPos pos = open.poll();
+            int d = hang.get(pos);
+            BlockPos up = pos.above();
+            if (cells.contains(up) && hang.getOrDefault(up, Integer.MAX_VALUE) > d) {
+                hang.put(up, d);
+                open.addFirst(up);
+            }
+            for (net.minecraft.core.Direction dir : net.minecraft.core.Direction.Plane.HORIZONTAL) {
+                BlockPos side = pos.relative(dir);
+                if (d + 1 <= ReachPlanner.MAX_HANG && cells.contains(side) && hang.getOrDefault(side, Integer.MAX_VALUE) > d + 1) {
+                    hang.put(side, d + 1);
+                    open.add(side);
+                }
+            }
+        }
+        List<BlockPos> loose = new ArrayList<>();
+        for (BlockPos pos : cells) if (!hang.containsKey(pos)) loose.add(pos);
+        // top down, so a scaffold is never removed from under another one of the list
+        loose.sort(Comparator.comparingInt((BlockPos p) -> -p.getY()));
+        return loose;
     }
 
     private static void notifyOwner(ServerLevel level, BuildJob job, Component message) {

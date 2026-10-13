@@ -2,10 +2,12 @@ package com.maidbuilder.common.job;
 
 import com.maidbuilder.MaidBuilder;
 import com.maidbuilder.MaidBuilderConfig;
+import com.maidbuilder.common.BlockBreaker;
 import com.maidbuilder.common.BlockPlacer;
 import com.maidbuilder.common.Convert;
 import com.maidbuilder.common.SchematicStore;
 import com.maidbuilder.common.StateResolver;
+import com.maidbuilder.core.plan.BuildPhase;
 import com.maidbuilder.core.plan.BuildPlan;
 import com.maidbuilder.core.plan.BuildPlanner;
 import com.maidbuilder.core.plan.BuildStep;
@@ -71,9 +73,21 @@ public final class BuildJob {
     private final Rotation rotation;
     private final Mirror mirror;
     private final boolean placeFluids;
+    /** What maids may break; jobs saved before clearing existed load as OFF so their plan stays the same. */
+    private ClearMode clearMode = ClearMode.OFF;
+    private int clearRadius;
     private byte[] status;
     /** Cancelled by its owner: maids stop building, take their scaffolding down, then the job is deleted. */
     private boolean cancelled;
+    /** Its territory lost its flag: maids stop (and take their scaffolding down) until a flag is back. */
+    private boolean suspended;
+    /** Territory whose queue this job is in, the template it builds, and the building it repairs (all optional). */
+    @Nullable
+    private UUID territoryId;
+    @Nullable
+    private String templateId;
+    @Nullable
+    private UUID buildingId;
     /** Containers the maids take missing materials from (plan phase 6). */
     private final List<BlockPos> materialSources = new ArrayList<>();
     /** Scaffolding blocks the maids put up; removed again once the job is complete. */
@@ -132,8 +146,14 @@ public final class BuildJob {
         tag.putString("Rotation", rotation.name());
         tag.putString("Mirror", mirror.name());
         tag.putBoolean("PlaceFluids", placeFluids);
+        tag.putString("ClearMode", clearMode.name());
+        tag.putInt("ClearRadius", clearRadius);
         if (status != null) tag.putByteArray("Status", status);
         if (cancelled) tag.putBoolean("Cancelled", true);
+        if (suspended) tag.putBoolean("Suspended", true);
+        if (territoryId != null) tag.putUUID("Territory", territoryId);
+        if (templateId != null) tag.putString("Template", templateId);
+        if (buildingId != null) tag.putUUID("Building", buildingId);
         tag.putLongArray("MaterialSources", materialSources.stream().mapToLong(BlockPos::asLong).toArray());
         tag.putLongArray("Scaffolds", scaffolds.stream().mapToLong(BlockPos::asLong).toArray());
         return tag;
@@ -152,9 +172,15 @@ public final class BuildJob {
                 enumOr(Mirror.class, tag.getString("Mirror"), Mirror.NONE),
                 tag.getBoolean("PlaceFluids"),
                 tag.contains("Status") ? tag.getByteArray("Status") : null);
+        job.clearMode = enumOr(ClearMode.class, tag.getString("ClearMode"), ClearMode.OFF);
+        job.clearRadius = tag.getInt("ClearRadius");
         for (long pos : tag.getLongArray("MaterialSources")) job.materialSources.add(BlockPos.of(pos));
         for (long pos : tag.getLongArray("Scaffolds")) job.scaffolds.add(BlockPos.of(pos));
         job.cancelled = tag.getBoolean("Cancelled");
+        job.suspended = tag.getBoolean("Suspended");
+        if (tag.hasUUID("Territory")) job.territoryId = tag.getUUID("Territory");
+        if (tag.contains("Template")) job.templateId = tag.getString("Template");
+        if (tag.hasUUID("Building")) job.buildingId = tag.getUUID("Building");
         return job;
     }
 
@@ -181,7 +207,7 @@ public final class BuildJob {
         if (plan != null) return;
         Schematic schematic = SchematicStore.loadStored(server, schematicHash);
         Placement placement = Convert.placement(origin, rotation, mirror);
-        BuildPlan built = BuildPlanner.plan(schematic, placement, new BuildPlanner.Options(placeFluids));
+        BuildPlan built = BuildPlanner.plan(schematic, placement, new BuildPlanner.Options(placeFluids, airClearRadius()));
         StateResolver resolver = new StateResolver(schematic.minecraftDataVersion());
         int n = built.size();
         BlockState[] resolved = new BlockState[n];
@@ -193,7 +219,9 @@ public final class BuildJob {
             resolved[i] = resolver.resolve(step.schematicState(), placement);
             reqs.add(requirementsFor(step.schematicState(), resolved[i]));
             BlockPos pos = Convert.toBlockPos(step.worldPos());
-            for (BlockPlacer.Part part : BlockPlacer.partsOf(pos, resolved[i])) taken.add(part.pos().asLong());
+            if (step.phase() != BuildPhase.CLEAR) {
+                for (BlockPlacer.Part part : BlockPlacer.partsOf(pos, resolved[i])) taken.add(part.pos().asLong());
+            }
             lo = lo == null ? pos : BlockPos.min(lo, pos);
             hi = hi == null ? pos : BlockPos.max(hi, pos);
         }
@@ -201,7 +229,8 @@ public final class BuildJob {
             status = new byte[n];
         }
         for (int i = 0; i < n; i++) {
-            if (status[i] == PENDING && (resolved[i].isAir() || reqs.get(i).isEmpty())) status[i] = FAILED;
+            if (status[i] == PENDING && built.steps().get(i).phase() != BuildPhase.CLEAR
+                    && (resolved[i].isAir() || reqs.get(i).isEmpty())) status[i] = FAILED;
         }
         this.unknownBlocks = List.copyOf(resolver.unknownBlocks());
         this.targets = resolved;
@@ -213,10 +242,104 @@ public final class BuildJob {
         this.cursor = 0;
     }
 
+    // ---- clearing ----
+
+    public ClearMode clearMode() {
+        return clearMode;
+    }
+
+    public int clearRadius() {
+        return clearRadius;
+    }
+
+    /** Radius the plan clears the schematic's air within; 0 when air is left alone. */
+    public int airClearRadius() {
+        return clearMode == ClearMode.ALL ? Math.max(1, clearRadius) : 0;
+    }
+
+    /** Takes the server's clearing settings; for new jobs, before they are first loaded. */
+    public void useDefaultClearing() {
+        this.clearMode = MaidBuilderConfig.CLEAR_MODE.get();
+        this.clearRadius = MaidBuilderConfig.CLEAR_RADIUS.get();
+    }
+
+    /** For repairs: wrong blocks of the building are replaced, but nothing else is cleared. Before the first load. */
+    public void limitClearingToReplace() {
+        if (clearMode == ClearMode.ALL) clearMode = ClearMode.REPLACE;
+    }
+
+    /**
+     * Changes what the maids may break. When the planned air cells change, the plan is rebuilt and
+     * the progress of the building steps is carried over by position.
+     */
+    public void setClearing(ClearMode mode, int radius, MinecraftServer server) throws IOException {
+        if (mode == clearMode && radius == clearRadius) return;
+        ensureLoaded(server);
+        int oldRadius = airClearRadius();
+        Map<Long, Byte> progress = new HashMap<>();
+        for (int i = 0; i < status.length; i++) {
+            if (!isClearStep(i)) progress.put(pos(i).asLong(), status[i]);
+        }
+        clearMode = mode;
+        clearRadius = radius;
+        if (airClearRadius() != oldRadius) {
+            plan = null;
+            status = null;
+            claims.clear();
+            claimByMaid.clear();
+            attempts.clear();
+            retryAfter.clear();
+            ensureLoaded(server);
+            for (int i = 0; i < status.length; i++) {
+                Byte old = isClearStep(i) ? null : progress.get(pos(i).asLong());
+                if (old != null) status[i] = old;
+            }
+        }
+        dirtyListener.run();
+    }
+
+    /** A step that breaks whatever stands in the schematic's air instead of placing a block. */
+    public boolean isClearStep(int index) {
+        return plan.steps().get(index).phase() == BuildPhase.CLEAR;
+    }
+
+    /** Whether the world already holds what step {@code index} wants at its position. */
+    public boolean isSatisfied(int index, BlockState inWorld) {
+        if (isClearStep(index)) return BlockBreaker.isCleared(inWorld) || isScaffold(pos(index));
+        return BlockPlacer.matches(inWorld, targets[index]);
+    }
+
+    /** Clear steps still to do. */
+    public int clearRemaining() {
+        if (plan == null) return 0;
+        int n = 0;
+        for (int i = 0; i < status.length; i++) {
+            if (status[i] == PENDING && isClearStep(i)) n++;
+        }
+        return n;
+    }
+
+    /**
+     * Marks pending clear steps whose cell is already empty as done, looking at up to {@code budget}
+     * of them from the first unfinished step. Most of the schematic's air usually is empty already,
+     * and this keeps the maids' bounded searches from wading through it.
+     */
+    public void sweepClear(net.minecraft.server.level.ServerLevel level, int budget) {
+        if (plan == null) return;
+        while (cursor < status.length && status[cursor] != PENDING) cursor++;
+        for (int i = cursor, seen = 0; i < status.length && seen < budget && isClearStep(i); i++) {
+            if (status[i] != PENDING || claims.containsKey(i)) continue;
+            seen++;
+            BlockPos pos = pos(i);
+            if (level.isLoaded(pos) && isSatisfied(i, level.getBlockState(pos))) setStatus(i, DONE);
+        }
+    }
+
     /** Items one placement of {@code state} consumes (the base item plus extras such as a potted plant). */
     public static List<Requirement> requirementsFor(BlockStateData data, BlockState state) {
         if (state.isAir()) return List.of();
-        Item base = state.getBlock().asItem();
+        Item base = MaterialRules.hasItemOverride(data)
+                ? BuiltInRegistries.ITEM.get(ResourceLocation.parse(MaterialRules.itemFor(data))) : state.getBlock().asItem();
         if (base == Items.AIR) {
             base = BuiltInRegistries.ITEM.get(ResourceLocation.parse(MaterialRules.itemFor(data)));
         }
@@ -295,9 +418,49 @@ public final class BuildJob {
         return cancelled;
     }
 
-    /** Nothing left to build: complete or cancelled. Scaffolding may still have to come down. */
+    /** Nothing to build now: complete, cancelled or suspended. Scaffolding may still have to come down. */
     public boolean isFinished() {
-        return cancelled || isComplete();
+        return cancelled || suspended || isComplete();
+    }
+
+    public boolean isSuspended() {
+        return suspended;
+    }
+
+    public void setSuspended(boolean value) {
+        if (suspended == value) return;
+        suspended = value;
+        if (value) {
+            claims.clear();
+            claimByMaid.clear();
+        }
+        dirtyListener.run();
+    }
+
+    // ---- territory ----
+
+    /** Links the job to a territory's queue (and optionally a template building or the building it repairs). */
+    public void setTerritory(@Nullable UUID territory, @Nullable String template, @Nullable UUID building) {
+        this.territoryId = territory;
+        this.templateId = template;
+        this.buildingId = building;
+        dirtyListener.run();
+    }
+
+    @Nullable
+    public UUID territoryId() {
+        return territoryId;
+    }
+
+    @Nullable
+    public String templateId() {
+        return templateId;
+    }
+
+    /** The building this job repairs; null for a new building or a plain job. */
+    @Nullable
+    public UUID buildingId() {
+        return buildingId;
     }
 
     /** Whether maids still have something to do for this job (build, or take scaffolding down). */
@@ -495,7 +658,7 @@ public final class BuildJob {
         if (targets == null) return wanted;
         int seen = 0;
         for (int i = cursor; i < status.length && seen < lookahead; i++) {
-            if (status[i] != PENDING || claims.containsKey(i)) continue;
+            if (status[i] != PENDING || claims.containsKey(i) || isClearStep(i)) continue; // clearing needs no materials
             Long notBefore = retryAfter.get(i);
             if (notBefore != null && notBefore > gameTime) continue;
             seen++;
@@ -510,6 +673,16 @@ public final class BuildJob {
 
     public List<BlockPos> materialSources() {
         return java.util.Collections.unmodifiableList(materialSources);
+    }
+
+    /** The job's own material containers plus those of its territory (while the territory is active). */
+    public List<BlockPos> allMaterialSources(MinecraftServer server) {
+        if (territoryId == null) return materialSources();
+        List<BlockPos> extra = com.maidbuilder.common.territory.TerritoryManager.materialSourcesOf(server, territoryId);
+        if (extra.isEmpty()) return materialSources();
+        List<BlockPos> all = new ArrayList<>(materialSources);
+        for (BlockPos pos : extra) if (!all.contains(pos)) all.add(pos);
+        return all;
     }
 
     public void addMaterialSource(BlockPos pos) {

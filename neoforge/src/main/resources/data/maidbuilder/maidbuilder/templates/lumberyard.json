@@ -1,0 +1,8 @@
+{
+  "structure": "maidbuilder:lumberyard",
+  "category": "production",
+  "required_level": 1,
+  "prosperity": 8,
+  "icon": "minecraft:iron_axe",
+  "order": 3
+}

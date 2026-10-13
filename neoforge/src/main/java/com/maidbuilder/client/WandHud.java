@@ -50,6 +50,9 @@ public final class WandHud {
         if (status != null) {
             lines.add(Component.translatable("hud.maidbuilder.job", status.done(), status.total(), status.needsPlayer(),
                     status.failed(), status.sources(), status.maids()).withStyle(ChatFormatting.AQUA));
+            if (status.toClear() > 0) {
+                lines.add(Component.translatable("hud.maidbuilder.clearing", status.toClear()).withStyle(ChatFormatting.GOLD));
+            }
             if (!status.missing().isEmpty()) {
                 lines.add(Component.translatable("hud.maidbuilder.missing").withStyle(ChatFormatting.RED));
                 for (Payloads.ItemCount missing : status.missing().subList(0, Math.min(MAX_MISSING_LINES, status.missing().size()))) {
@@ -61,6 +64,10 @@ public final class WandHud {
             if (preview != null) {
                 lines.add(Component.translatable("hud.maidbuilder.preview", preview.count(GhostPreview.MATCH), preview.total(),
                         preview.count(GhostPreview.MISSING), preview.count(GhostPreview.WRONG)));
+                if (preview.count(GhostPreview.TO_CLEAR) > 0) {
+                    lines.add(Component.translatable("hud.maidbuilder.preview_clear", preview.count(GhostPreview.TO_CLEAR))
+                            .withStyle(ChatFormatting.GOLD));
+                }
             }
         }
         lines.add(Component.translatable(jobId == null ? "hud.maidbuilder.keys" : "hud.maidbuilder.keys_linked",

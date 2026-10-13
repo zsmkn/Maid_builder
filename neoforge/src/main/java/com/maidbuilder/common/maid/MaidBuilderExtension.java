@@ -11,14 +11,17 @@ import com.maidbuilder.MaidBuilder;
 @LittleMaidExtension
 public class MaidBuilderExtension implements ILittleMaid {
     public static TaskDataKey<BuilderMaidData> BUILDER_DATA;
+    public static TaskDataKey<WorkplaceMaidData> WORKPLACE_DATA;
 
     @Override
     public void addMaidTask(TaskManager manager) {
         manager.add(new TaskBuilder());
+        manager.add(new TaskDeposit());
     }
 
     @Override
     public void registerTaskData(TaskDataRegister register) {
         BUILDER_DATA = register.register(MaidBuilder.id("builder"), BuilderMaidData.CODEC);
+        WORKPLACE_DATA = register.register(MaidBuilder.id("workplace"), WorkplaceMaidData.CODEC);
     }
 }

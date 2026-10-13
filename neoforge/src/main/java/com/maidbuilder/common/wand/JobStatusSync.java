@@ -64,7 +64,7 @@ public final class JobStatusSync {
         Map<Item, Integer> available = new HashMap<>();
         ServerLevel level = server.getLevel(job.dimension());
         if (level != null) {
-            for (IItemHandler handler : MaterialContainers.distinct(level, job.materialSources()).values()) {
+            for (IItemHandler handler : MaterialContainers.distinct(level, job.allMaterialSources(server)).values()) {
                 MaterialContainers.count(handler, available);
             }
         }
@@ -76,7 +76,7 @@ public final class JobStatusSync {
         missing.sort((a, b) -> Integer.compare(b.count(), a.count()));
         if (missing.size() > MAX_MISSING_ENTRIES) missing = new ArrayList<>(missing.subList(0, MAX_MISSING_ENTRIES));
         return new Payloads.JobStatus(job.id(), job.schematicName(), job.count(BuildJob.DONE), job.size(),
-                job.count(BuildJob.NEEDS_PLAYER), job.count(BuildJob.FAILED), job.materialSources().size(),
+                job.count(BuildJob.NEEDS_PLAYER), job.count(BuildJob.FAILED), job.clearRemaining(), job.airClearRadius(), job.allMaterialSources(server).size(),
                 job.activeWorkers(server.overworld().getGameTime()), missing);
     }
 }

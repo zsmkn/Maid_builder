@@ -1,0 +1,9 @@
+{
+  "level": 5,
+  "radius": 79,
+  "prosperity": 300,
+  "required_buildings": [ { "category": "production", "count": 5 } ],
+  "upgrade_items": { "minecraft:emerald": 32, "minecraft:diamond_block": 2 },
+  "resident_points": 4,
+  "resident_cap": 10
+}

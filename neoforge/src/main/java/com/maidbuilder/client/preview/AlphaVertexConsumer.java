@@ -2,14 +2,22 @@ package com.maidbuilder.client.preview;
 
 import com.mojang.blaze3d.vertex.VertexConsumer;
 
-/** Passes vertices through, scaling their alpha so solid block models render see-through. */
+/** Passes vertices through, scaling their alpha so solid block models render see-through (and optionally tinting them). */
 final class AlphaVertexConsumer implements VertexConsumer {
     private final VertexConsumer delegate;
     private final float alpha;
+    private final float red, green, blue;
 
     AlphaVertexConsumer(VertexConsumer delegate, float alpha) {
+        this(delegate, alpha, 1f, 1f, 1f);
+    }
+
+    AlphaVertexConsumer(VertexConsumer delegate, float alpha, float red, float green, float blue) {
         this.delegate = delegate;
         this.alpha = alpha;
+        this.red = red;
+        this.green = green;
+        this.blue = blue;
     }
 
     @Override
@@ -20,7 +28,7 @@ final class AlphaVertexConsumer implements VertexConsumer {
 
     @Override
     public VertexConsumer setColor(int red, int green, int blue, int a) {
-        delegate.setColor(red, green, blue, (int) (a * alpha));
+        delegate.setColor((int) (red * this.red), (int) (green * this.green), (int) (blue * this.blue), (int) (a * alpha));
         return this;
     }
 

@@ -55,6 +55,13 @@ neoForge {
             programArguments.addAll '--quickPlaySingleplayer', 'selftest'
             systemProperty 'maidbuilder.selftest', 'true'
         }
+        // Template art check: pastes every built-in template in the world "selftest", saves
+        // screenshots/maidbuilder_showcase_*.png, cleans up and quits.
+        templateShowcase {
+            client()
+            programArguments.addAll '--quickPlaySingleplayer', 'selftest'
+            systemProperty 'maidbuilder.showcase', 'true'
+        }
         // Runs all maidbuilder game tests, then exits (non-zero on failure).
         gameTestServer {
             type = 'gameTestServer'
@@ -88,6 +95,7 @@ dependencies {
 // Embed the core module's classes directly in the mod jar.
 tasks.named('jar', Jar) {
     from(project(':core').sourceSets.main.output)
+    archiveFileName = "${mod_id}-release_${mod_version}_neoforge${minecraft_version}.jar"
 }
 
 var generateModMetadata = tasks.register('generateModMetadata', ProcessResources) {
