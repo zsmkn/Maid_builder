@@ -98,14 +98,16 @@ public class BuilderFetchMaterialTask extends Behavior<EntityMaid> {
         Map<Item, Integer> inventory = MaidInventory.count(maid);
         long now = level.getGameTime();
         job.touchWorker(maid.getUUID(), now);
-        // Still something she can build with what she carries? Then keep building.
-        if (job.findNext(now, i -> MaidInventory.has(inventory, job.requirements(i)) && inRange(maid, job.pos(i)), LOOKAHEAD_STEPS) >= 0) {
+        // Still something she can build with what she carries? Then keep building. (Clearing needs no
+        // materials, so it does not count: a clear step waiting for scaffolding must not stop her fetching.)
+        if (job.findNext(now, i -> !job.isClearStep(i) && MaidInventory.has(inventory, job.requirements(i))
+                && inRange(maid, job.pos(i)), LOOKAHEAD_STEPS) >= 0) {
             return false;
         }
         // Only her share of what is left (at most LOOKAHEAD_STEPS): otherwise the first maid at the
         // chest empties it and the others stand idle; a bigger share means fewer trips.
         int team = Math.max(job.teamSize(now), teamNearby(level, job));
-        int share = Math.max(MIN_LOOKAHEAD, Math.min(LOOKAHEAD_STEPS, (job.count(BuildJob.PENDING) + team - 1) / team));
+        int share = Math.max(MIN_LOOKAHEAD, Math.min(LOOKAHEAD_STEPS, (job.count(BuildJob.PENDING) - job.clearRemaining() + team - 1) / team));
         Map<Item, Integer> next = job.shoppingList(inventory, share, now);
         if (!next.isEmpty() && fromContainer(level, maid, job, next)) return true;
 
@@ -122,7 +124,7 @@ public class BuilderFetchMaterialTask extends Behavior<EntityMaid> {
         BlockPos best = null;
         double bestDist = Double.MAX_VALUE;
         double range = MaidBuilderConfig.MATERIAL_SOURCE_RANGE.get();
-        for (Map.Entry<BlockPos, IItemHandler> e : MaterialContainers.distinct(level, job.materialSources()).entrySet()) {
+        for (Map.Entry<BlockPos, IItemHandler> e : MaterialContainers.distinct(level, job.allMaterialSources(level.getServer())).entrySet()) {
             double dist = maid.distanceToSqr(Vec3.atCenterOf(e.getKey()));
             if (dist > range * range || dist >= bestDist) continue;
             if (MaterialContainers.containsAny(e.getValue(), list)) {

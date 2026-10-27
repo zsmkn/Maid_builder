@@ -67,6 +67,13 @@ legacyForge {
             // -PnettestReload=true: second pass after a server restart (lists the jobs)
             systemProperty 'maidbuilder.nettest.reload', (project.findProperty('nettestReload') ?: 'false').toString()
         }
+        // Template art check: pastes every built-in template in the world "selftest", saves
+        // screenshots/maidbuilder_showcase_*.png, cleans up and quits.
+        templateShowcase {
+            client()
+            programArguments.addAll '--quickPlaySingleplayer', 'selftest'
+            systemProperty 'maidbuilder.showcase', 'true'
+        }
         // Runs all maidbuilder game tests, then exits (non-zero on failure).
         gameTestServer {
             type = 'gameTestServer'

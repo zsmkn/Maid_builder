@@ -17,11 +17,13 @@ public final class ClientModEvents {
     public static void registerKeys(RegisterKeyMappingsEvent event) {
         for (KeyMapping key : WandKeys.ALL) event.register(key);
         event.register(WandKeys.MATERIALS);
+        for (KeyMapping key : com.maidbuilder.client.territory.TerritoryKeys.ALL) event.register(key);
     }
 
     @SubscribeEvent
     public static void registerHud(RegisterGuiOverlaysEvent event) {
         event.registerAboveAll("wand_hud", (gui, graphics, partialTick, width, height) -> WandHud.render(graphics, partialTick));
         event.registerAboveAll("quill_hud", (gui, graphics, partialTick, width, height) -> QuillClient.renderHud(graphics, partialTick));
+        event.registerAboveAll("build_mode_hud", (gui, graphics, partialTick, width, height) -> com.maidbuilder.client.territory.BuildModeHud.render(graphics, partialTick));
     }
 }

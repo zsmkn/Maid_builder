@@ -28,6 +28,7 @@ import com.maidbuilder.core.transform.Placement;
 import com.maidbuilder.core.transform.Rotation;
 import com.maidbuilder.item.CaptureArea;
 import com.maidbuilder.network.Payloads;
+import com.maidbuilder.network.TerritoryPayloads;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.gametest.framework.GameTest;
@@ -179,6 +180,12 @@ public final class MaidBuilderGameTests {
     @GameTest(template = FLOOR)
     public static void jobDataRoundTrip(GameTestHelper helper) {
         BuildJob job = createHutJob(helper);
+        try {
+            job.setClearing(com.maidbuilder.common.job.ClearMode.ALL, 3, helper.getLevel().getServer());
+        } catch (IOException e) {
+            helper.fail("cannot change clearing: " + e);
+            return;
+        }
         job.setStatus(0, BuildJob.DONE);
         job.setStatus(1, BuildJob.NEEDS_PLAYER);
         job.addMaterialSource(helper.absolutePos(new BlockPos(1, 2, 1)));
@@ -211,6 +218,16 @@ public final class MaidBuilderGameTests {
         if (!loaded.materialSources().equals(job.materialSources()) || !loaded.scaffolds().equals(job.scaffolds())) {
             helper.fail("material containers or scaffolding changed on reload");
         }
+        if (loaded.clearMode() != com.maidbuilder.common.job.ClearMode.ALL || loaded.clearRadius() != 3) {
+            helper.fail("clearing changed on reload: " + loaded.clearMode() + " " + loaded.clearRadius());
+        }
+        // a job saved by 1.0.0 has no clearing mode and must not start breaking blocks
+        net.minecraft.nbt.CompoundTag old = saved.copy();
+        for (net.minecraft.nbt.Tag t : old.getList("Jobs", net.minecraft.nbt.Tag.TAG_COMPOUND)) ((net.minecraft.nbt.CompoundTag) t).remove("ClearMode");
+        BuildJob oldJob = com.maidbuilder.common.job.BuildJobData.load(old).get(job.id());
+        if (oldJob == null || oldJob.clearMode() != com.maidbuilder.common.job.ClearMode.OFF) {
+            helper.fail("a job without a clearing mode did not load as OFF");
+        }
         job.cancel();
         com.maidbuilder.common.job.BuildJobData cancelled = new com.maidbuilder.common.job.BuildJobData();
         cancelled.add(job);
@@ -225,22 +242,63 @@ public final class MaidBuilderGameTests {
     @GameTest(template = FLOOR)
     public static void payloadsRoundTrip(GameTestHelper helper) {
         UUID id = UUID.randomUUID();
+        UUID owner2 = UUID.randomUUID();
+        com.maidbuilder.common.territory.TemplateDef template = new com.maidbuilder.common.territory.TemplateDef(MaidBuilder.id("test/ranch"),
+                MaidBuilder.id("ranch"), "production", "ranch", 2, 15, "ranch", false,
+                java.util.Optional.of(new com.maidbuilder.common.territory.TemplateDef.Workplace(
+                        new net.minecraft.resources.ResourceLocation("touhou_little_maid", "feed_animal"), 2,
+                        List.of("minecraft:beef", "#forge:leather"), 0)),
+                new net.minecraft.resources.ResourceLocation("lead"), 7);
         byte[] chunk = new byte[Payloads.UPLOAD_CHUNK_BYTES];
         new java.util.Random(1).nextBytes(chunk);
         List<Object> messages = List.of(
                 new Payloads.SelectSchematic("dir/house.litematic", "0123456789abcdef0123456789abcdef01234567", new BlockPos(1, -2, 3)),
                 new Payloads.AdjustPlacement(Payloads.Adjustment.LEFT),
                 new Payloads.RequestUpload("house.nbt", "0123456789abcdef0123456789abcdef01234567"),
-                new Payloads.JobStatus(id, "house", 1, 2, 3, 4, 5, 6, List.of(new Payloads.ItemCount(Items.OAK_PLANKS, 7))),
-                new Payloads.RequestMaterialReport(true),
+                new Payloads.JobStatus(id, "house", 1, 2, 3, 4, 5, 6, 7, 8, List.of(new Payloads.ItemCount(Items.OAK_PLANKS, 7))),
+                new Payloads.RequestMaterialReport(java.util.Optional.of(id), true),
+                new Payloads.RequestMaterialReport(java.util.Optional.empty(), false),
                 new Payloads.MaterialReport(false, id, "house", 1, 2, 3, 4, 5, 6,
                         List.of(new Payloads.MaterialRow(Items.TORCH, 1, 2, 3, 4, 5), new Payloads.MaterialRow(Items.OAK_DOOR, 0, 1, 0, 0, 1))),
                 new Payloads.QuillAdjust(false, 5),
-                new Payloads.CaptureRequest("my blueprint"));
+                new Payloads.CaptureRequest("my blueprint"),
+                new Payloads.ClearSettings(5),
+                new TerritoryPayloads.RequestTerritoryReport(id, true),
+                new TerritoryPayloads.TerritoryAction(id, TerritoryPayloads.Action.ASSIGN, java.util.Optional.of(id), java.util.Optional.empty()),
+                new TerritoryPayloads.RequestTemplate(MaidBuilder.id("dormitory")),
+                new TerritoryPayloads.PlaceTemplate(id, MaidBuilder.id("ranch"), new BlockPos(-5, 64, 7),
+                        net.minecraft.world.level.block.Rotation.CLOCKWISE_90, net.minecraft.world.level.block.Mirror.FRONT_BACK),
+                new TerritoryPayloads.PlaceResult(true),
+                new TerritoryPayloads.TerritoryList(List.of(new TerritoryPayloads.TerritoryInfo(id, owner2, "Alice",
+                        new net.minecraft.resources.ResourceLocation("the_nether"), new BlockPos(10, 70, -20), 48, 2, false,
+                        List.of(new TerritoryPayloads.Box(new BlockPos(1, 2, 3), new BlockPos(4, 5, 6), true))))),
+                new TerritoryPayloads.TemplateList(List.of(new TerritoryPayloads.TemplateInfo(template, 9, 5, 11, 321))));
         for (Object message : messages) {
             Object decoded = roundTrip(message);
             if (!message.equals(decoded)) helper.fail(message + " decoded as " + decoded);
         }
+        TerritoryPayloads.TerritoryReport report = new TerritoryPayloads.TerritoryReport(true, id, "Alice", new BlockPos(1, 2, 3), 2, 5,
+                48, 64, true, 1, 10, 30, 20, 10, 3, 6,
+                List.of(new TerritoryPayloads.ConditionRow(1, "greenhouse", 0, 1)),
+                List.of(new TerritoryPayloads.ItemRow("#minecraft:logs", Items.OAK_LOG, 3, 64)), false,
+                List.of(new TerritoryPayloads.JobRow(id, "ranch", "maidbuilder:ranch", 1, 2, 3, 4, true, false)),
+                List.of(new TerritoryPayloads.BuildingRow(owner2, "maidbuilder:ranch", true, 97, 1, 2, false, new BlockPos(7, 8, 9))),
+                List.of(new TerritoryPayloads.MaidRow(id, "Reimu", true, true, "touhou_little_maid:farm", false, java.util.Optional.of(owner2),
+                        10, 24, false, true)),
+                2, false, true, List.of("maid_regen"), List.of("crop_growth", "animal_breeding"));
+        if (!report.equals(roundTrip(report))) helper.fail("territory report changed");
+        TerritoryPayloads.TemplateInfo info = (TerritoryPayloads.TemplateInfo) roundTrip(new TerritoryPayloads.TemplateInfo(template, 1, 2, 3, 4));
+        if (!info.def().equals(template)) helper.fail("template definition changed: " + info.def());
+        byte[] structure = new byte[com.maidbuilder.common.territory.TemplateRegistry.MAX_STRUCTURE_BYTES];
+        new java.util.Random(3).nextBytes(structure);
+        TerritoryPayloads.TemplateStructure ts = (TerritoryPayloads.TemplateStructure) roundTrip(
+                new TerritoryPayloads.TemplateStructure(MaidBuilder.id("ranch"), "0123456789abcdef0123456789abcdef01234567", structure));
+        if (!ts.id().equals(MaidBuilder.id("ranch")) || !java.util.Arrays.equals(ts.bytes(), structure)) helper.fail("template structure changed");
+        // the largest template still fits into one clientbound custom payload (1.20.1: 1048576 bytes, plus the channel's index byte)
+        net.minecraft.network.FriendlyByteBuf sizeBuf = new net.minecraft.network.FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+        ts.encode(sizeBuf);
+        if (sizeBuf.readableBytes() + 1 > 1048576) helper.fail("largest template structure payload is " + sizeBuf.readableBytes() + " bytes");
+        sizeBuf.release();
         Payloads.UploadChunk upload = (Payloads.UploadChunk) roundTrip(new Payloads.UploadChunk("0123456789abcdef0123456789abcdef01234567", 2, 3, chunk));
         if (upload.index() != 2 || upload.total() != 3 || !java.util.Arrays.equals(upload.data(), chunk)) helper.fail("upload chunk changed");
         byte[] big = new byte[Payloads.DOWNLOAD_CHUNK_BYTES];
@@ -288,6 +346,28 @@ public final class MaidBuilderGameTests {
         helper.succeedWhen(() -> {
             assertHutBuilt(helper, job);
             assertHoldsNoHutMaterials(helper, inv);
+            BuildJobManager.data(helper.getLevel().getServer()).remove(job.id());
+        });
+    }
+
+    /** Placing water uses up the water bucket but leaves the empty bucket with the maid. */
+    @GameTest(template = FLOOR, timeoutTicks = 2400)
+    public static void maidKeepsEmptyBucket(GameTestHelper helper) {
+        LitematicWriter.RegionBuilder rb = new LitematicWriter.RegionBuilder("basin", IntPos.ZERO, new IntPos(3, 1, 3));
+        for (int x = 0; x < 3; x++) {
+            for (int z = 0; z < 3; z++) rb.set(x, 0, z, x == 1 && z == 1 ? "minecraft:water" : "minecraft:cobblestone");
+        }
+        BlockPos origin = new BlockPos(7, 2, 7);
+        BuildJob job = createJob(helper, LitematicWriter.schematic("basin", 3955, List.of(rb.build())), origin, true);
+        EntityMaid maid = spawnBuilderMaid(helper, job);
+        IItemHandler inv = maid.getAvailableInv(false);
+        ItemHandlerHelper.insertItemStacked(inv, new ItemStack(Items.COBBLESTONE, 8), false);
+        ItemHandlerHelper.insertItemStacked(inv, new ItemStack(Items.WATER_BUCKET), false);
+        helper.succeedWhen(() -> {
+            if (!helper.getLevel().getFluidState(helper.absolutePos(origin.offset(1, 0, 1))).isSource()) helper.fail("no water placed");
+            if (count(inv, Items.WATER_BUCKET) != 0 || count(inv, Items.BUCKET) != 1) {
+                helper.fail("buckets: " + count(inv, Items.WATER_BUCKET) + " water, " + count(inv, Items.BUCKET) + " empty");
+            }
             BuildJobManager.data(helper.getLevel().getServer()).remove(job.id());
         });
     }
@@ -817,8 +897,56 @@ public final class MaidBuilderGameTests {
         });
     }
 
+    // ---- wide structures: one column does not reach everything at a height, so she changes columns ----
+
+    @GameTest(template = TALL_FLOOR, timeoutTicks = 24000)
+    public static void wideTowerOneMaid(GameTestHelper helper) {
+        buildTower(helper, 1, 8, 64, 13, new BlockPos(2, 2, 2), new BlockPos(0, 2, 0), new BlockPos(0, 2, 1));
+    }
+
+    @GameTest(template = TALL_FLOOR, timeoutTicks = 24000)
+    public static void dormitoryOneMaid(GameTestHelper helper) {
+        Schematic schematic = com.maidbuilder.common.territory.TemplateRegistry.entry(MaidBuilder.id("dormitory")).schematic();
+        BuildJob job = createJob(helper, schematic, new BlockPos(2, 2, 3));
+        BlockPos chestRel = new BlockPos(0, 2, 0);
+        helper.setBlock(chestRel, Blocks.CHEST);
+        BlockPos chestAbs = helper.absolutePos(chestRel);
+        IItemHandler chest = com.maidbuilder.common.MaterialContainers.handler(helper.getLevel(), chestAbs);
+        if (chest == null) throw new IllegalStateException("chest has no item handler");
+        java.util.Map<net.minecraft.world.item.Item, Integer> needed = new java.util.HashMap<>();
+        for (int i = 0; i < job.size(); i++) {
+            for (BuildJob.Requirement r : job.requirements(i)) needed.merge(r.item(), r.count(), Integer::sum);
+        }
+        needed.forEach((item, n) -> {
+            for (int left = n; left > 0; ) {
+                ItemStack stack = new ItemStack(item, Math.min(left, item.getMaxStackSize()));
+                left -= stack.getCount();
+                if (!ItemHandlerHelper.insertItemStacked(chest, stack, false).isEmpty()) helper.fail("chest full");
+            }
+        });
+        job.toggleMaterialSource(chestAbs);
+        EntityMaid maid = spawnBuilderMaid(helper, job, new BlockPos(0, 2, 1));
+        ItemHandlerHelper.insertItemStacked(maid.getAvailableInv(false), new ItemStack(Items.SCAFFOLDING, 64), false);
+        int[] descents = trackDescents(helper, List.of(maid));
+        helper.succeedWhen(() -> {
+            if (!job.isComplete() || job.count(BuildJob.DONE) != job.size()) {
+                helper.fail("progress " + job.count(BuildJob.DONE) + "/" + job.size() + ", needs player " + job.count(BuildJob.NEEDS_PLAYER));
+            }
+            if (!job.scaffolds().isEmpty()) helper.fail(job.scaffolds().size() + " scaffolding still up");
+            if (count(maid.getAvailableInv(false), Items.SCAFFOLDING) != 64) helper.fail("maid holds " + count(maid.getAvailableInv(false), Items.SCAFFOLDING) + " scaffolding");
+            if (maid.isShiftKeyDown()) helper.fail("maid is still sneaking");
+            MaidBuilder.LOGGER.info("BENCH dormitory with 1 maid: {} ticks, {} trips down", helper.getTick(), descents[0]);
+            BuildJobManager.data(helper.getLevel().getServer()).remove(job.id());
+        });
+    }
+
     private static void buildTower(GameTestHelper helper, int maids, int height, int scaffoldingEach) {
-        int size = 5;
+        buildTower(helper, maids, height, scaffoldingEach, 5, new BlockPos(6, 2, 6), new BlockPos(1, 2, 1),
+                new BlockPos(1, 2, 2), new BlockPos(2, 2, 1), new BlockPos(1, 2, 3));
+    }
+
+    private static void buildTower(GameTestHelper helper, int maids, int height, int scaffoldingEach, int size, BlockPos origin,
+                                   BlockPos chestRel, BlockPos... spawns) {
         LitematicWriter.RegionBuilder rb = new LitematicWriter.RegionBuilder("tower", IntPos.ZERO, new IntPos(size, height, size));
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < size; x++) {
@@ -829,21 +957,20 @@ public final class MaidBuilderGameTests {
                 }
             }
         }
-        BuildJob job = createJob(helper, LitematicWriter.schematic("tower", 3955, List.of(rb.build())), new BlockPos(6, 2, 6));
-        BlockPos chestRel = new BlockPos(1, 2, 1);
+        BuildJob job = createJob(helper, LitematicWriter.schematic("tower", 3955, List.of(rb.build())), origin);
         helper.setBlock(chestRel, Blocks.CHEST);
         BlockPos chestAbs = helper.absolutePos(chestRel);
         IItemHandler chest = com.maidbuilder.common.MaterialContainers.handler(helper.getLevel(), chestAbs);
         if (chest == null) throw new IllegalStateException("chest has no item handler");
         ItemHandlerHelper.insertItemStacked(chest, new ItemStack(Items.STONE_BRICKS, job.size()), false);
         job.toggleMaterialSource(chestAbs);
-        BlockPos[] spawns = {new BlockPos(1, 2, 2), new BlockPos(2, 2, 1), new BlockPos(1, 2, 3)};
         List<EntityMaid> team = new java.util.ArrayList<>();
         for (int i = 0; i < maids; i++) {
             EntityMaid maid = spawnBuilderMaid(helper, job, spawns[i]);
             ItemHandlerHelper.insertItemStacked(maid.getAvailableInv(false), new ItemStack(Items.SCAFFOLDING, scaffoldingEach), false);
             team.add(maid);
         }
+        int[] descents = trackDescents(helper, team);
         helper.succeedWhen(() -> {
             if (!job.isComplete() || job.count(BuildJob.DONE) != job.size()) {
                 helper.fail("progress " + job.count(BuildJob.DONE) + "/" + job.size() + ", needs player " + job.count(BuildJob.NEEDS_PLAYER));
@@ -855,9 +982,27 @@ public final class MaidBuilderGameTests {
                 if (maid.isShiftKeyDown()) helper.fail("a maid is still sneaking");
             }
             if (scaffolding != scaffoldingEach * maids) helper.fail("maids hold " + scaffolding + " scaffolding, expected " + scaffoldingEach * maids);
-            MaidBuilder.LOGGER.info("BENCH tower {} high with {} maid(s): {} ticks", height, maids, helper.getTick());
+            MaidBuilder.LOGGER.info("BENCH tower {}x{} {} high with {} maid(s): {} ticks, {} trips down", size, size, height, maids, helper.getTick(), descents[0]);
             BuildJobManager.data(helper.getLevel().getServer()).remove(job.id());
         });
+    }
+
+    /** Counts how often the maids come back down to the ground after being up on scaffolding. */
+    private static int[] trackDescents(GameTestHelper helper, List<EntityMaid> team) {
+        int[] descents = {0};
+        boolean[] up = new boolean[team.size()];
+        double ground = helper.absolutePos(new BlockPos(0, 2, 0)).getY();
+        helper.onEachTick(() -> {
+            for (int i = 0; i < team.size(); i++) {
+                double height = team.get(i).getY() - ground;
+                if (height > 2.5) up[i] = true;
+                else if (up[i] && height < 0.5 && team.get(i).onGround()) {
+                    up[i] = false;
+                    descents[0]++;
+                }
+            }
+        });
+        return descents;
     }
 
     // ---- 13. a double chest bound half by half; maid B joins after maid A already took her share ----
@@ -1050,10 +1195,14 @@ public final class MaidBuilderGameTests {
     }
 
     private static BuildJob createJob(GameTestHelper helper, Schematic schematic, BlockPos relativeOrigin) {
+        return createJob(helper, schematic, relativeOrigin, false);
+    }
+
+    private static BuildJob createJob(GameTestHelper helper, Schematic schematic, BlockPos relativeOrigin, boolean placeFluids) {
         String hash = storeSchematic(helper, schematic);
         BuildJob job = new BuildJob(UUID.randomUUID(), UUID.randomUUID(), "gametest", schematic.metadata().name(), hash,
                 helper.getLevel().dimension(), helper.absolutePos(relativeOrigin), net.minecraft.world.level.block.Rotation.NONE,
-                net.minecraft.world.level.block.Mirror.NONE, false, null);
+                net.minecraft.world.level.block.Mirror.NONE, placeFluids, null);
         try {
             job.ensureLoaded(helper.getLevel().getServer());
         } catch (IOException e) {
@@ -1098,6 +1247,230 @@ public final class MaidBuilderGameTests {
                 helper.fail("materials left over: " + s);
             }
         }
+    }
+
+    // ---- 9. clearing: wrong blocks are broken and replaced, the schematic's air near the building is cleared ----
+
+    /** Breaks at this position are cancelled through the player break event, like a protection mod would. */
+    @javax.annotation.Nullable
+    private static volatile BlockPos denyBreakAt;
+    @javax.annotation.Nullable
+    private static volatile UUID lastBreakPlayer;
+    private static boolean breakListenerRegistered;
+
+    private static void listenToBreaks() {
+        if (breakListenerRegistered) return;
+        breakListenerRegistered = true;
+        net.minecraftforge.common.MinecraftForge.EVENT_BUS.addListener((net.minecraftforge.event.level.BlockEvent.BreakEvent e) -> {
+            if (!(e.getPlayer() instanceof net.minecraftforge.common.util.FakePlayer)) return;
+            lastBreakPlayer = e.getPlayer().getUUID();
+            if (e.getPos().equals(denyBreakAt)) e.setCanceled(true);
+        });
+    }
+
+    private static void setClearing(GameTestHelper helper, BuildJob job, com.maidbuilder.common.job.ClearMode mode, int radius) {
+        try {
+            job.setClearing(mode, radius, helper.getLevel().getServer());
+        } catch (IOException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static int countItem(IItemHandler inv, Item item) {
+        int n = 0;
+        for (int i = 0; i < inv.getSlots(); i++) {
+            if (inv.getStackInSlot(i).is(item)) n += inv.getStackInSlot(i).getCount();
+        }
+        return n;
+    }
+
+    @GameTest(template = FLOOR, timeoutTicks = 3000)
+    public static void maidReplacesWrongBlocks(GameTestHelper helper) {
+        BuildJob job = createHutJob(helper);
+        setClearing(helper, job, com.maidbuilder.common.job.ClearMode.REPLACE, 5);
+        helper.setBlock(HUT_ORIGIN.offset(1, 0, 1), Blocks.COBBLESTONE);      // floor
+        helper.setBlock(HUT_ORIGIN.offset(0, 1, 0), Blocks.STONE);            // log
+        helper.setBlock(HUT_ORIGIN.offset(2, 2, 2), Blocks.DIRT);             // where the door's top half goes
+        helper.setBlock(HUT_ORIGIN.offset(1, 0, 2), Blocks.CHEST);            // never broken
+        EntityMaid maid = spawnBuilderMaid(helper, job);
+        IItemHandler inv = maid.getAvailableInv(false);
+        for (ItemStack stack : hutMaterials()) ItemHandlerHelper.insertItemStacked(inv, stack.copy(), false);
+
+        helper.succeedWhen(() -> {
+            if (!job.isComplete()) helper.fail("progress " + job.count(BuildJob.DONE) + "/" + job.size()
+                    + ", needs player " + job.count(BuildJob.NEEDS_PLAYER) + ", failed " + job.count(BuildJob.FAILED));
+            if (job.count(BuildJob.NEEDS_PLAYER) != 1 || job.count(BuildJob.FAILED) != 0) {
+                helper.fail("expected only the chest left for the player, got " + job.count(BuildJob.NEEDS_PLAYER)
+                        + " needing the player and " + job.count(BuildJob.FAILED) + " failed");
+            }
+            helper.assertBlockPresent(Blocks.OAK_PLANKS, HUT_ORIGIN.offset(1, 0, 1));
+            helper.assertBlockPresent(Blocks.OAK_LOG, HUT_ORIGIN.offset(0, 1, 0));
+            helper.assertBlockPresent(Blocks.OAK_DOOR, HUT_ORIGIN.offset(2, 1, 2));
+            helper.assertBlockPresent(Blocks.OAK_DOOR, HUT_ORIGIN.offset(2, 2, 2));
+            helper.assertBlockPresent(Blocks.CHEST, HUT_ORIGIN.offset(1, 0, 2));
+            // stone drops cobblestone; the drops went to her
+            if (countItem(inv, Items.COBBLESTONE) != 2) helper.fail("expected 2 cobblestone, got " + countItem(inv, Items.COBBLESTONE));
+            if (countItem(inv, Items.DIRT) != 1) helper.fail("expected 1 dirt, got " + countItem(inv, Items.DIRT));
+            if (countItem(inv, Items.OAK_PLANKS) != 1) helper.fail("expected the chest's plank left over, got " + countItem(inv, Items.OAK_PLANKS));
+            BuildJobManager.data(helper.getLevel().getServer()).remove(job.id());
+        });
+    }
+
+    /**
+     * Clearing with an empty-handed maid: she clears the air of the hut's schematic box and fetches the
+     * materials. Outside the schematic's box nothing is cleared.
+     */
+    @GameTest(template = FLOOR, timeoutTicks = 4000)
+    public static void maidClearsAndFetchesFromChest(GameTestHelper helper) {
+        BuildJob job = createHutJob(helper);
+        setClearing(helper, job, com.maidbuilder.common.job.ClearMode.ALL, 5);
+        BlockPos chestRel = new BlockPos(2, 2, 12);
+        helper.setBlock(chestRel, Blocks.CHEST);
+        BlockPos chestAbs = helper.absolutePos(chestRel);
+        IItemHandler chest = com.maidbuilder.common.MaterialContainers.handler(helper.getLevel(), chestAbs);
+        if (chest == null) throw new IllegalStateException("chest has no item handler");
+        for (ItemStack stack : hutMaterials()) ItemHandlerHelper.insertItemStacked(chest, stack.copy(), false);
+        job.toggleMaterialSource(chestAbs);
+        BlockPos inside = HUT_ORIGIN.offset(1, 1, 1), corner = HUT_ORIGIN.offset(2, 1, 0), outsideBox = HUT_ORIGIN.offset(4, 1, 0);
+        for (BlockPos p : List.of(inside, corner, outsideBox)) helper.setBlock(p, Blocks.DIRT);
+
+        EntityMaid maid = spawnBuilderMaid(helper, job);
+        helper.succeedWhen(() -> {
+            assertHutBuilt(helper, job);
+            helper.assertBlockPresent(Blocks.AIR, inside);
+            helper.assertBlockPresent(Blocks.AIR, corner);
+            helper.assertBlockPresent(Blocks.DIRT, outsideBox);
+            helper.assertBlockPresent(Blocks.CHEST, chestRel);
+            if (countItem(maid.getAvailableInv(false), Items.DIRT) != 2) helper.fail("expected 2 dirt, got " + countItem(maid.getAvailableInv(false), Items.DIRT));
+            assertHoldsNoHutMaterials(helper, chest);
+            BuildJobManager.data(helper.getLevel().getServer()).remove(job.id());
+        });
+    }
+
+    private static final BlockPos POST = new BlockPos(8, 2, 8);
+
+    /**
+     * One plank post in a 13x2x13 box of air, clearing radius 3: blocks on the post's layer within
+     * the circle are broken, ones outside it, on the layer above, in a container or protected stay.
+     */
+    @GameTest(template = FLOOR, timeoutTicks = 3000)
+    public static void maidClearsSchematicAirNearBuilding(GameTestHelper helper) {
+        listenToBreaks();
+        LitematicWriter.RegionBuilder rb = new LitematicWriter.RegionBuilder("post", IntPos.ZERO, new IntPos(13, 2, 13));
+        rb.set(6, 0, 6, "minecraft:oak_planks");
+        BuildJob job = createJob(helper, LitematicWriter.schematic("post", 3955, List.of(rb.build())), POST.offset(-6, 0, -6));
+        setClearing(helper, job, com.maidbuilder.common.job.ClearMode.ALL, 3);
+        // lattice points within radius 3, minus the post
+        if (job.clearRemaining() != 28) helper.fail("expected 28 cells to clear, got " + job.clearRemaining());
+
+        BlockPos inRange = POST.east(3), diagonal = POST.offset(2, 0, 2), flower = POST.west(2);
+        BlockPos outside = POST.offset(3, 0, 1), above = POST.above(), far = POST.south(5);
+        BlockPos chest = POST.north(1), denied = POST.north(3);
+        for (BlockPos p : List.of(inRange, diagonal, outside, above, far, denied)) helper.setBlock(p, Blocks.DIRT);
+        helper.setBlock(flower, Blocks.POPPY);
+        helper.setBlock(chest, Blocks.CHEST);
+        denyBreakAt = helper.absolutePos(denied);
+
+        EntityMaid maid = spawnBuilderMaid(helper, job);
+        IItemHandler inv = maid.getAvailableInv(false);
+        ItemHandlerHelper.insertItemStacked(inv, new ItemStack(Items.OAK_PLANKS, 1), false);
+
+        helper.succeedWhen(() -> {
+            if (!job.isComplete()) helper.fail("progress " + job.count(BuildJob.DONE) + "/" + job.size()
+                    + ", clear left " + job.clearRemaining() + ", needs player " + job.count(BuildJob.NEEDS_PLAYER));
+            if (job.count(BuildJob.NEEDS_PLAYER) != 1) helper.fail("expected the chest left for the player, got " + job.count(BuildJob.NEEDS_PLAYER));
+            if (job.count(BuildJob.FAILED) != 1) helper.fail("expected the protected block to fail, got " + job.count(BuildJob.FAILED));
+            helper.assertBlockPresent(Blocks.OAK_PLANKS, POST);
+            helper.assertBlockPresent(Blocks.AIR, inRange);
+            helper.assertBlockPresent(Blocks.AIR, diagonal);
+            helper.assertBlockPresent(Blocks.AIR, flower);
+            helper.assertBlockPresent(Blocks.DIRT, outside);
+            helper.assertBlockPresent(Blocks.DIRT, above);
+            helper.assertBlockPresent(Blocks.DIRT, far);
+            helper.assertBlockPresent(Blocks.DIRT, denied);
+            helper.assertBlockPresent(Blocks.CHEST, chest);
+            if (countItem(inv, Items.DIRT) != 2) helper.fail("expected 2 dirt, got " + countItem(inv, Items.DIRT));
+            if (countItem(inv, Items.POPPY) != 1) helper.fail("expected the poppy, got " + countItem(inv, Items.POPPY));
+            if (!job.owner().equals(lastBreakPlayer)) helper.fail("break event fired as " + lastBreakPlayer + ", not the owner " + job.owner());
+            denyBreakAt = null;
+            BuildJobManager.data(helper.getLevel().getServer()).remove(job.id());
+        });
+    }
+
+    /** A wrong block high up a pillar is broken from the top of her scaffolding and replaced. */
+    @GameTest(template = TALL_FLOOR, timeoutTicks = 6000)
+    public static void maidReplacesHighWrongBlockFromScaffold(GameTestHelper helper) {
+        LitematicWriter.RegionBuilder rb = new LitematicWriter.RegionBuilder("pillar", IntPos.ZERO, new IntPos(1, PILLAR_HEIGHT, 1));
+        for (int y = 0; y < PILLAR_HEIGHT; y++) rb.set(0, y, 0, "minecraft:oak_planks");
+        BuildJob job = createJob(helper, LitematicWriter.schematic("pillar", 3955, List.of(rb.build())), PILLAR);
+        setClearing(helper, job, com.maidbuilder.common.job.ClearMode.REPLACE, 5);
+        helper.setBlock(PILLAR.above(PILLAR_HEIGHT - 2), Blocks.COBBLESTONE);
+        EntityMaid maid = spawnBuilderMaid(helper, job);
+        IItemHandler inv = maid.getAvailableInv(false);
+        ItemHandlerHelper.insertItemStacked(inv, new ItemStack(Items.OAK_PLANKS, PILLAR_HEIGHT), false);
+        ItemHandlerHelper.insertItemStacked(inv, new ItemStack(Items.SCAFFOLDING, 16), false);
+
+        helper.succeedWhen(() -> {
+            if (!job.isComplete() || job.count(BuildJob.DONE) != job.size()) {
+                helper.fail("progress " + job.count(BuildJob.DONE) + "/" + job.size() + ", needs player " + job.count(BuildJob.NEEDS_PLAYER));
+            }
+            if (!job.scaffolds().isEmpty()) helper.fail(job.scaffolds().size() + " scaffolding blocks still up");
+            for (int y = 0; y < PILLAR_HEIGHT; y++) helper.assertBlockPresent(Blocks.OAK_PLANKS, PILLAR.above(y));
+            if (countItem(inv, Items.COBBLESTONE) != 1) helper.fail("expected the cobblestone, got " + countItem(inv, Items.COBBLESTONE));
+            if (countItem(inv, Items.SCAFFOLDING) != 16) helper.fail("maid holds " + countItem(inv, Items.SCAFFOLDING) + " scaffolding");
+            BuildJobManager.data(helper.getLevel().getServer()).remove(job.id());
+        });
+    }
+
+    /** Switching the clearing mode keeps the progress of the building steps; old saves load without clearing. */
+    @GameTest(template = FLOOR)
+    public static void clearingSettingsKeepProgressAndSave(GameTestHelper helper) {
+        BuildJob job = createHutJob(helper);
+        int buildSteps = job.size();
+        job.setStatus(0, BuildJob.DONE);
+        job.setStatus(3, BuildJob.NEEDS_PLAYER);
+        BlockPos done = job.pos(0), left = job.pos(3);
+
+        setClearing(helper, job, com.maidbuilder.common.job.ClearMode.ALL, 5);
+        if (job.size() <= buildSteps) helper.fail("ALL should add clear steps: " + job.size());
+        if (job.clearRemaining() != job.size() - buildSteps) helper.fail("clear steps " + job.clearRemaining() + " of " + job.size());
+        expectStatus(helper, job, done, BuildJob.DONE);
+        expectStatus(helper, job, left, BuildJob.NEEDS_PLAYER);
+        if (!job.isClearStep(0)) helper.fail("clear steps should come first");
+
+        BuildJob loaded = BuildJob.load(job.save());
+        if (loaded.clearMode() != com.maidbuilder.common.job.ClearMode.ALL || loaded.clearRadius() != 5) {
+            helper.fail("clearing not saved: " + loaded.clearMode() + " " + loaded.clearRadius());
+        }
+        try {
+            loaded.ensureLoaded(helper.getLevel().getServer());
+        } catch (IOException e) {
+            throw new IllegalStateException(e);
+        }
+        if (loaded.size() != job.size()) helper.fail("reloaded plan has " + loaded.size() + " steps, expected " + job.size());
+        expectStatus(helper, loaded, done, BuildJob.DONE);
+
+        setClearing(helper, job, com.maidbuilder.common.job.ClearMode.REPLACE, 5);
+        if (job.size() != buildSteps) helper.fail("REPLACE should plan only the building: " + job.size());
+        expectStatus(helper, job, done, BuildJob.DONE);
+        expectStatus(helper, job, left, BuildJob.NEEDS_PLAYER);
+
+        net.minecraft.nbt.CompoundTag old = job.save();
+        old.remove("ClearMode");
+        old.remove("ClearRadius");
+        if (BuildJob.load(old).clearMode() != com.maidbuilder.common.job.ClearMode.OFF) helper.fail("old saves must load without clearing");
+        BuildJobManager.data(helper.getLevel().getServer()).remove(job.id());
+        helper.succeed();
+    }
+
+    private static void expectStatus(GameTestHelper helper, BuildJob job, BlockPos pos, byte status) {
+        for (int i = 0; i < job.size(); i++) {
+            if (!job.isClearStep(i) && job.pos(i).equals(pos)) {
+                if (job.status(i) != status) helper.fail("step at " + pos + " has status " + job.status(i) + ", expected " + status);
+                return;
+            }
+        }
+        helper.fail("no building step at " + pos);
     }
 
     // ---- helpers ----

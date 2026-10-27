@@ -20,6 +20,7 @@ import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Finds a way to get within reach of a block: first a spot the maid can walk to, then (if none
@@ -243,6 +244,130 @@ final class ReachPlanner {
             }
         }
         return null;
+    }
+
+    // ---- 3. moving sideways on top of the scaffolding ----
+
+    /** Scaffolding hangs at most this many blocks sideways from a supported column (vanilla: distance 7 falls). */
+    static final int MAX_HANG = 6;
+    /** How far (horizontally, per axis) a sideways move may lead. */
+    private static final int SHIFT_RADIUS = 8;
+    private static final int[][] SIDES = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+
+    /** Feet positions to walk through, in order, and how many of the cells under them need new scaffolding. */
+    record Walk(List<BlockPos> path, int newBlocks) {
+        BlockPos end() {
+            return path.get(path.size() - 1);
+        }
+    }
+
+    /**
+     * A way along the top of the scaffolding, at the height she stands at, to a spot that reaches
+     * {@code target}: over the job's scaffolding where it exists, otherwise over new scaffolding
+     * hung from it (no further than {@link #MAX_HANG} from support). Fewest new blocks first, then
+     * the shortest walk; null if none needs at most {@code maxNew} new blocks.
+     * <p>She goes right next to the target if she can: the blocks beyond it (usually the next ones
+     * along a wall) are then in reach too, instead of one more short move each.
+     */
+    @Nullable
+    static Walk planShift(ServerLevel level, EntityMaid maid, BuildJob job, BlockPos stand, BlockPos target, int maxNew) {
+        Walk close = planShift(level, maid, job, stand, target, maxNew, 1);
+        return close != null ? close : planShift(level, maid, job, stand, target, maxNew, SHIFT_RADIUS * 2);
+    }
+
+    /** As above, ending within {@code near} blocks (horizontally, per axis) of the target. */
+    @Nullable
+    private static Walk planShift(ServerLevel level, EntityMaid maid, BuildJob job, BlockPos stand, BlockPos target, int maxNew, int near) {
+        double eye = maid.getEyeHeight();
+        double margin = MaidBuilderConfig.WORK_AREA_MARGIN.get();
+        record Node(BlockPos pos, int newBlocks, int length, int hang, @Nullable Node from) {
+        }
+        java.util.PriorityQueue<Node> open = new java.util.PriorityQueue<>(
+                Comparator.<Node>comparingInt(Node::newBlocks).thenComparingInt(Node::length));
+        java.util.Map<BlockPos, Integer> best = new java.util.HashMap<>();
+        open.add(new Node(stand, 0, 0, hang(level, stand.below()), null));
+        best.put(stand, 0);
+        while (!open.isEmpty()) {
+            Node node = open.poll();
+            if (node.from() != null && reaches(node.pos(), eye, target)
+                    && Math.abs(node.pos().getX() - target.getX()) <= near && Math.abs(node.pos().getZ() - target.getZ()) <= near
+                    && !node.pos().equals(target) && !node.pos().above().equals(target) && !node.pos().below().equals(target)) {
+                List<BlockPos> path = new ArrayList<>();
+                for (Node n = node; n.from() != null; n = n.from()) path.add(n.pos());
+                java.util.Collections.reverse(path);
+                return new Walk(path, node.newBlocks());
+            }
+            for (int[] side : SIDES) {
+                BlockPos next = node.pos().offset(side[0], 0, side[1]);
+                if (Math.abs(next.getX() - stand.getX()) > SHIFT_RADIUS || Math.abs(next.getZ() - stand.getZ()) > SHIFT_RADIUS) continue;
+                if (!level.isLoaded(next) || !job.columnFreeFor(BuildJob.columnKey(next), maid.getUUID())) continue;
+                if (job.isStructurePos(next) || job.isStructurePos(next.above())) continue;
+                if (level.getBlockState(next).is(Blocks.SCAFFOLDING) || !passable(level, next) || !passable(level, next.above())) continue;
+                BlockPos cell = next.below();
+                int newBlocks = node.newBlocks(), hang;
+                if (job.isScaffold(cell) && level.getBlockState(cell).is(Blocks.SCAFFOLDING)) {
+                    hang = hang(level, cell);
+                } else if (buildable(level, cell) && !job.isStructurePos(cell) && job.inWorkArea(cell, margin)) {
+                    hang = node.hang() + 1;
+                    if (hang > MAX_HANG || ++newBlocks > maxNew) continue;
+                } else {
+                    continue;
+                }
+                Integer seen = best.get(next);
+                int rank = newBlocks * 1000 + node.length() + 1;
+                if (seen != null && seen <= rank) continue;
+                best.put(next, rank);
+                open.add(new Node(next, newBlocks, node.length() + 1, hang, node));
+            }
+        }
+        return null;
+    }
+
+    /**
+     * A way along the top of the job's scaffolding, at the height she stands at, to a column that
+     * stands on the ground (so she can slide down it): the feet positions to walk through, ending
+     * over or inside that column; empty if she is on one already, null if there is none.
+     */
+    @Nullable
+    static List<BlockPos> planReturn(ServerLevel level, BuildJob job, BlockPos stand) {
+        Map<Long, List<BlockPos>> columns = job.scaffoldColumns();
+        java.util.Map<BlockPos, BlockPos> from = new java.util.HashMap<>();
+        java.util.ArrayDeque<BlockPos> open = new java.util.ArrayDeque<>();
+        open.add(stand);
+        from.put(stand, stand);
+        while (!open.isEmpty()) {
+            BlockPos node = open.poll();
+            List<BlockPos> column = columns.get(BuildJob.columnKey(node));
+            if (column != null && column.get(0).getY() < node.getY() && grounded(level, column.get(0))) {
+                List<BlockPos> path = new ArrayList<>();
+                for (BlockPos p = node; !p.equals(stand); p = from.get(p)) path.add(p);
+                java.util.Collections.reverse(path);
+                return path;
+            }
+            for (int[] side : SIDES) {
+                BlockPos next = node.offset(side[0], 0, side[1]);
+                if (from.containsKey(next) || Math.abs(next.getX() - stand.getX()) > 2 * SHIFT_RADIUS
+                        || Math.abs(next.getZ() - stand.getZ()) > 2 * SHIFT_RADIUS) continue;
+                boolean onTop = job.isScaffold(next.below()), inside = job.isScaffold(next);
+                if (!onTop && !inside || !passable(level, next) || !passable(level, next.above())) continue;
+                from.put(next, node);
+                open.add(next);
+            }
+        }
+        return null;
+    }
+
+    /** The lowest cell of a column rests on the ground (not on more scaffolding or on nothing). */
+    static boolean grounded(Level level, BlockPos lowest) {
+        BlockPos below = lowest.below();
+        BlockState state = level.getBlockState(below);
+        return !state.is(Blocks.SCAFFOLDING) && state.isFaceSturdy(level, below, Direction.UP);
+    }
+
+    /** How far a scaffold hangs from its support (0 when it stands on something). */
+    private static int hang(Level level, BlockPos cell) {
+        BlockState state = level.getBlockState(cell);
+        return state.is(Blocks.SCAFFOLDING) ? state.getValue(ScaffoldingBlock.DISTANCE) : 0;
     }
 
     /** Whether a teammate currently uses one of the job's scaffold columns. */

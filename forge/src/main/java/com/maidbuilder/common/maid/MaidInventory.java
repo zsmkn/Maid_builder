@@ -47,14 +47,20 @@ final class MaidInventory {
         if (!rest.isEmpty()) maid.spawnAtLocation(rest);
     }
 
-    /** Removes the items; callers check {@link #has} first. */
+    /**
+     * Removes the items; callers check {@link #has} first. What the items leave behind (the empty
+     * bucket of a water bucket) goes back into her inventory.
+     */
     static void consume(EntityMaid maid, List<BuildJob.Requirement> requirements) {
         IItemHandler inv = maid.getAvailableInv(false);
         for (BuildJob.Requirement r : requirements) {
             int remaining = r.count();
             for (int i = 0; i < inv.getSlots() && remaining > 0; i++) {
                 if (inv.getStackInSlot(i).is(r.item())) {
-                    remaining -= inv.extractItem(i, remaining, false).getCount();
+                    ItemStack taken = inv.extractItem(i, remaining, false);
+                    remaining -= taken.getCount();
+                    ItemStack leftover = taken.getCraftingRemainingItem();
+                    if (!leftover.isEmpty()) give(maid, leftover.copyWithCount(leftover.getCount() * taken.getCount()));
                 }
             }
         }

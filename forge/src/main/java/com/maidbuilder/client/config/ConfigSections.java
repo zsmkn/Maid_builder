@@ -24,10 +24,23 @@ final class ConfigSections {
                         MaidBuilderConfig.PLACE_REACH, MaidBuilderConfig.PLACE_FLUIDS, MaidBuilderConfig.MAX_ATTEMPTS,
                         MaidBuilderConfig.MAX_SCAN_PER_SEARCH, MaidBuilderConfig.OWNER_RANGE_WITHOUT_HOME,
                         MaidBuilderConfig.MATERIAL_SOURCE_RANGE, MaidBuilderConfig.WORK_AREA_MARGIN,
-                        MaidBuilderConfig.USE_SCAFFOLDING, MaidBuilderConfig.MAX_SCAFFOLD_HEIGHT),
+                        MaidBuilderConfig.USE_SCAFFOLDING, MaidBuilderConfig.MAX_SCAFFOLD_HEIGHT,
+                        MaidBuilderConfig.CLEAR_MODE, MaidBuilderConfig.CLEAR_RADIUS, MaidBuilderConfig.MAX_BREAK_HARDNESS),
                 section(MaidBuilderConfig.SPEC, "maidbuilder.configuration.schematics",
                         MaidBuilderConfig.MAX_SCHEMATIC_VOLUME, MaidBuilderConfig.MAX_UPLOAD_BYTES,
-                        MaidBuilderConfig.MAX_PASTE_BLOCKS, MaidBuilderConfig.MAX_CAPTURE_VOLUME));
+                        MaidBuilderConfig.MAX_PASTE_BLOCKS, MaidBuilderConfig.MAX_CAPTURE_VOLUME),
+                withSubsections(section(MaidBuilderConfig.SPEC, "maidbuilder.configuration.territory",
+                                MaidBuilderConfig.MAX_FLAGS_PER_PLAYER, MaidBuilderConfig.MIN_FLAG_DISTANCE_CHUNKS,
+                                MaidBuilderConfig.RESUME_FREE_FRACTION),
+                        section(MaidBuilderConfig.SPEC, "maidbuilder.configuration.bonuses",
+                                MaidBuilderConfig.BONUS_NO_HOSTILE_SPAWNS, MaidBuilderConfig.BONUS_NO_SPAWNER_MOBS,
+                                MaidBuilderConfig.BONUS_MAID_REGEN, MaidBuilderConfig.MAID_REGEN_INTERVAL,
+                                MaidBuilderConfig.BONUS_CROP_GROWTH, MaidBuilderConfig.CROP_GROWTH_CHANCE,
+                                MaidBuilderConfig.BONUS_ANIMAL_BREEDING, MaidBuilderConfig.BREEDING_COOLDOWN_FACTOR)));
+    }
+
+    private static ConfigEntry.Section withSubsections(ConfigEntry.Section section, ConfigEntry.Section... subsections) {
+        return new ConfigEntry.Section(section.key(), section.entries(), List.of(subsections));
     }
 
     private static ConfigEntry.Section section(ForgeConfigSpec spec, String key, ForgeConfigSpec.ConfigValue<?>... values) {

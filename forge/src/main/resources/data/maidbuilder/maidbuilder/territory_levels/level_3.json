@@ -1,0 +1,10 @@
+{
+  "level": 3,
+  "radius": 64,
+  "prosperity": 80,
+  "required_buildings": [ { "group": "greenhouse" }, { "group": "ranch" } ],
+  "upgrade_items": { "minecraft:gold_ingot": 16, "minecraft:cake": 4 },
+  "resident_points": 3,
+  "resident_cap": 6,
+  "bonuses": [ "crop_growth", "animal_breeding" ]
+}

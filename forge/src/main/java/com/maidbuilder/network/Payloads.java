@@ -41,12 +41,12 @@ public final class Payloads {
         return item == null ? Items.AIR : item;
     }
 
-    private static <T> void writeList(FriendlyByteBuf buf, List<T> list, BiConsumer<FriendlyByteBuf, T> writer) {
+    public static <T> void writeList(FriendlyByteBuf buf, List<T> list, BiConsumer<FriendlyByteBuf, T> writer) {
         buf.writeVarInt(list.size());
         for (T t : list) writer.accept(buf, t);
     }
 
-    private static <T> List<T> readList(FriendlyByteBuf buf, int max, Function<FriendlyByteBuf, T> reader) {
+    public static <T> List<T> readList(FriendlyByteBuf buf, int max, Function<FriendlyByteBuf, T> reader) {
         int size = buf.readVarInt();
         if (size < 0 || size > max) throw new DecoderException(size + " elements exceeds the limit of " + max);
         List<T> list = new ArrayList<>(size);
@@ -126,10 +126,12 @@ public final class Payloads {
     /**
      * Server -> client: progress of the job linked to the wand the player holds.
      *
+     * @param toClear clear steps (cells of the schematic's air) still to check or break
+     * @param clearRadius how far the job clears the schematic's air (0: not at all), for the preview
      * @param missing items still needed that are neither in the material containers nor in the maids' reach
      */
-    public record JobStatus(UUID job, String name, int done, int total, int needsPlayer, int failed,
-                            int sources, int maids, List<ItemCount> missing) {
+    public record JobStatus(UUID job, String name, int done, int total, int needsPlayer, int failed, int toClear,
+                            int clearRadius, int sources, int maids, List<ItemCount> missing) {
         public void encode(FriendlyByteBuf buf) {
             buf.writeUUID(job);
             buf.writeUtf(name);
@@ -137,6 +139,8 @@ public final class Payloads {
             buf.writeVarInt(total);
             buf.writeVarInt(needsPlayer);
             buf.writeVarInt(failed);
+            buf.writeVarInt(toClear);
+            buf.writeVarInt(clearRadius);
             buf.writeVarInt(sources);
             buf.writeVarInt(maids);
             writeList(buf, missing, (b, c) -> c.encode(b));
@@ -144,7 +148,19 @@ public final class Payloads {
 
         public static JobStatus decode(FriendlyByteBuf buf) {
             return new JobStatus(buf.readUUID(), buf.readUtf(), buf.readVarInt(), buf.readVarInt(), buf.readVarInt(),
-                    buf.readVarInt(), buf.readVarInt(), buf.readVarInt(), readList(buf, 64, ItemCount::decode));
+                    buf.readVarInt(), buf.readVarInt(), buf.readVarInt(), buf.readVarInt(), buf.readVarInt(),
+                    readList(buf, 64, ItemCount::decode));
+        }
+    }
+
+    /** Server -> client: how far jobs created now clear the schematic's air (0: not at all). */
+    public record ClearSettings(int airRadius) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeVarInt(airRadius);
+        }
+
+        public static ClearSettings decode(FriendlyByteBuf buf) {
+            return new ClearSettings(buf.readVarInt());
         }
     }
 
@@ -179,14 +195,15 @@ public final class Payloads {
         }
     }
 
-    /** Client -> server: send me the material list of the job linked to the wand I hold. */
-    public record RequestMaterialReport(boolean open) {
+    /** Client -> server: send me the material list of this job, or (empty) of the job linked to the wand I hold. */
+    public record RequestMaterialReport(java.util.Optional<UUID> job, boolean open) {
         public void encode(FriendlyByteBuf buf) {
+            buf.writeOptional(job, FriendlyByteBuf::writeUUID);
             buf.writeBoolean(open);
         }
 
         public static RequestMaterialReport decode(FriendlyByteBuf buf) {
-            return new RequestMaterialReport(buf.readBoolean());
+            return new RequestMaterialReport(buf.readOptional(FriendlyByteBuf::readUUID), buf.readBoolean());
         }
     }
 

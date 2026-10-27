@@ -132,4 +132,12 @@ class StructureReaderTest {
 
         assertThrows(SchematicFormatException.class, () -> READER.read(new NbtCompound().put("foo", 1)));
     }
+
+    @Test
+    void forEachAirSkipsStructureVoid() throws IOException {
+        Schematic schematic = readCompressed(house());
+        List<IntPos> air = new java.util.ArrayList<>();
+        schematic.forEachAir(air::add);
+        assertEquals(List.of(new IntPos(0, 1, 0)), air);
+    }
 }

@@ -1,0 +1,25 @@
+{
+  "structure": "maidbuilder:large_ranch",
+  "category": "production",
+  "group": "ranch",
+  "required_level": 3,
+  "prosperity": 30,
+  "bonus": "ranch",
+  "icon": "minecraft:lead",
+  "order": 8,
+  "workplace": {
+    "task": "touhou_little_maid:feed_animal",
+    "max_maids": 2,
+    "products": [
+      "minecraft:beef",
+      "minecraft:porkchop",
+      "minecraft:chicken",
+      "minecraft:mutton",
+      "minecraft:rabbit",
+      "#forge:leather",
+      "#forge:feathers",
+      "#forge:eggs",
+      "#minecraft:wool"
+    ]
+  }
+}

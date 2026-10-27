@@ -22,6 +22,7 @@ import net.minecraft.world.entity.ai.memory.WalkTarget;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.ScaffoldingBlock;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.items.IItemHandler;
@@ -39,17 +40,21 @@ import java.util.UUID;
  *   <li>picks a column next to the block ({@link ReachPlanner#planColumn}), reusing existing scaffolding;</li>
  *   <li>walks to its foot and stacks scaffolding from her inventory (like a player extending a column from below);</li>
  *   <li>climbs it (scaffolding is climbable: she jumps inside it);</li>
- *   <li>builds every block she has materials for within reach of the top;</li>
+ *   <li>builds every block she has materials for within reach of the top (breaking wrong ones on the way);</li>
  *   <li>if the next block in build order is out of reach but raising this column would reach it,
  *       she stacks more scaffolding from where she stands and climbs on (no trip down and up);</li>
- *   <li>otherwise sneaks to slide back down (sneaking entities fall through scaffolding).</li>
+ *   <li>otherwise, if a block that needs scaffolding is reachable from a spot at the same height,
+ *       she walks there along the top of the scaffolding, hanging new scaffolding sideways where
+ *       there is none yet (as a player does, at most {@link ReachPlanner#MAX_HANG} from support);</li>
+ *   <li>otherwise walks back to a column standing on the ground and sneaks to slide down it
+ *       (sneaking entities fall through scaffolding).</li>
  * </ol>
  * The scaffolding stays up for later blocks and is taken down by {@link BuilderTeardownTask} once
  * the job is complete. Without scaffolding she asks her owner for some (or fetches it from a
  * material container) and carries on with other blocks meanwhile.
  */
 public class BuilderScaffoldTask extends Behavior<EntityMaid> {
-    private enum Stage { WALK, BUILD, CLIMB, WORK, DESCEND, DONE }
+    private enum Stage { WALK, BUILD, CLIMB, WORK, SHIFT, RETURN, DESCEND, DONE }
 
     private static final int MAX_RUN_TICKS = 20 * 60 * 5;
     private static final int PLACE_INTERVAL = 4;
@@ -60,6 +65,8 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
     private static final int NOTIFY_INTERVAL = 20 * 60;
     private static final int FETCH_AT_LEAST = 16;
     private static final int COLUMN_BUSY_WAIT = 100;
+    /** Ticks allowed per step of a walk along the scaffolding before she gives up on it. */
+    private static final int STEP_TIMEOUT = 40;
 
     private final BuilderSession session;
     private final float speed;
@@ -69,6 +76,10 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
     /** Foot of the column and the height she stands at on top of it. */
     private BlockPos base = BlockPos.ZERO;
     private int standY;
+    /** Feet positions of the walk along the scaffolding (SHIFT / RETURN) and the next one to reach. */
+    private List<BlockPos> walk = List.of();
+    private int walkIndex;
+    private int stepTicks;
     private int stageTicks;
     private UUID maidId = new UUID(0, 0);
 
@@ -103,7 +114,8 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
             session.scaffoldStep = -1;
             base = current.get(0);
             standY = current.get(current.size() - 1).getY() + 1;
-            enter(onTop(maid) ? Stage.WORK : Stage.DESCEND);
+            if (onTop(maid)) enter(Stage.WORK);
+            else goDown(level, maid);
             MaidBuilder.LOGGER.debug("Maid {} is on scaffolding at {} (y {}), stage {}", maid.getUUID(), base, maid.getY(), stage);
             return;
         }
@@ -167,8 +179,10 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
         switch (stage) {
             case WALK -> walk(maid, gameTime);
             case BUILD -> build(level, maid, gameTime);
-            case CLIMB -> climb(maid, gameTime);
+            case CLIMB -> climb(level, maid, gameTime);
             case WORK -> work(level, maid, gameTime);
+            case SHIFT -> shift(level, maid, gameTime);
+            case RETURN -> walkBack(maid);
             case DESCEND -> descend(maid);
             case DONE -> {
             }
@@ -230,7 +244,7 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
      * driven here directly (as TLM's own climb task does): walk into the column's foot, then rise
      * centred in it until she stands on top.
      */
-    private void climb(EntityMaid maid, long gameTime) {
+    private void climb(ServerLevel level, EntityMaid maid, long gameTime) {
         holdStill(maid);
         if (onTop(maid)) {
             enter(Stage.WORK);
@@ -247,7 +261,7 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
             MaidBuilder.LOGGER.debug("Maid {} could not climb the scaffolding at {} (stand y {}): at {}",
                     maid.getUUID(), base, standY, maid.position());
             failClaimed(maid, gameTime);
-            enter(Stage.DESCEND);
+            goDown(level, maid);
         }
     }
 
@@ -261,15 +275,14 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
         holdStill(maid);
         if (!onTop(maid) || stageTicks > WORK_TIMEOUT || job.isFinished()) {
             job.release(maid.getUUID());
-            enter(Stage.DESCEND);
+            goDown(level, maid);
             return;
         }
         if (stageTicks % WORK_INTERVAL != 0) return;
         UUID id = maid.getUUID();
         int index = job.claimOf(id);
         if (index >= 0 && job.status(index) == BuildJob.PENDING && ReachPlanner.inReach(maid, job.pos(index))) {
-            BuilderPlaceTask.placeStep(level, maid, job, index);
-            job.release(id);
+            if (!BuilderPlaceTask.workStep(level, maid, job, index, session, WORK_INTERVAL)) job.release(id);
             return;
         }
         job.release(id);
@@ -282,8 +295,8 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
         }, MaidBuilderConfig.MAX_SCAN_PER_SEARCH.get());
         if (next >= 0 && job.claim(next, id)) {
             maid.getBrain().setMemory(MemoryModuleType.LOOK_TARGET, new BlockPosTracker(job.pos(next)));
-        } else if (!raise(level, maid, gameTime)) {
-            enter(Stage.DESCEND);
+        } else if (!raise(level, maid, gameTime) && !planShift(level, maid, gameTime)) {
+            goDown(level, maid);
         }
     }
 
@@ -293,7 +306,8 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
      * the column, as clicking any scaffold of a column does), then climb on.
      */
     private boolean raise(ServerLevel level, EntityMaid maid, long gameTime) {
-        if (!MaidBuilderConfig.USE_SCAFFOLDING.get()) return false;
+        // hanging scaffolding is only walked on: stacking on it would leave her no way down
+        if (!MaidBuilderConfig.USE_SCAFFOLDING.get() || !ReachPlanner.grounded(level, base)) return false;
         UUID id = maid.getUUID();
         int next = BuilderFindTargetTask.pickNext(level, maid, job, session, gameTime);
         if (next < 0 || job.pos(next).getY() < standY) return false;
@@ -305,6 +319,119 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
         standY = raised.standY();
         enter(Stage.BUILD);
         return true;
+    }
+
+    /**
+     * Nothing left in reach and the column cannot be raised for the next block: take the nearest
+     * block that needs scaffolding (one at her height or above) and, if a walk along the top of the
+     * scaffolding at this height reaches it, claim it and go there.
+     */
+    private boolean planShift(ServerLevel level, EntityMaid maid, long gameTime) {
+        if (!MaidBuilderConfig.USE_SCAFFOLDING.get()) return false;
+        UUID id = maid.getUUID();
+        BlockPos stand = base.atY(standY);
+        int next = BuilderFindTargetTask.pickNext(level, maid, job, session, gameTime, i -> job.pos(i).getY() >= standY - 1);
+        if (next < 0) return false;
+        ReachPlanner.Walk w = ReachPlanner.planShift(level, maid, job, stand, job.pos(next), MaidInventory.count(maid, Items.SCAFFOLDING));
+        if (w == null || !job.claimColumn(BuildJob.columnKey(w.end()), id) || !job.claim(next, id)) return false;
+        MaidBuilder.LOGGER.debug("Maid {} walks {} along the scaffolding ({} new) from {} to reach {}",
+                id, w.path().size(), w.newBlocks(), stand, job.pos(next));
+        startWalk(w.path(), Stage.SHIFT);
+        return true;
+    }
+
+    private void startWalk(List<BlockPos> path, Stage next) {
+        walk = path;
+        walkIndex = 0;
+        stepTicks = 0;
+        enter(next);
+    }
+
+    /** Walks the planned way, hanging a scaffold under each step that has none yet; then works from its end. */
+    private void shift(ServerLevel level, EntityMaid maid, long gameTime) {
+        if (job.isFinished()) {
+            goDown(level, maid);
+            return;
+        }
+        BlockPos step = walk.get(walkIndex);
+        BlockPos cell = step.below();
+        if (!level.getBlockState(cell).is(Blocks.SCAFFOLDING)) {
+            holdStill(maid);
+            if (stageTicks % PLACE_INTERVAL != 0) return;
+            maid.getLookControl().setLookAt(Vec3.atCenterOf(cell));
+            if (!level.getBlockState(cell).canBeReplaced() || MaidInventory.count(maid, Items.SCAFFOLDING) < 1
+                    || ScaffoldingBlock.getDistance(level, cell) > ReachPlanner.MAX_HANG) {
+                failClaimed(maid, gameTime);
+                goDown(level, maid);
+                return;
+            }
+            MaidInventory.consume(maid, List.of(new BuildJob.Requirement(Items.SCAFFOLDING, 1)));
+            level.setBlock(cell, ReachPlanner.scaffoldState(level, cell), Block.UPDATE_ALL);
+            job.addScaffold(cell);
+            maid.swing(InteractionHand.MAIN_HAND);
+            level.playSound(null, cell, SoundEvents.SCAFFOLDING_PLACE, SoundSource.BLOCKS, 1.0f, 0.8f);
+            return;
+        }
+        if (stepAlong(maid)) {
+            BlockPos end = walk.get(walk.size() - 1);
+            List<BlockPos> column = job.scaffoldColumns().get(BuildJob.columnKey(end));
+            base = column == null ? end.below() : column.get(0);
+            standY = end.getY();
+            enter(Stage.WORK);
+        } else if (stepTicks > STEP_TIMEOUT) {
+            MaidBuilder.LOGGER.debug("Maid {} could not walk along the scaffolding to {}: at {}", maid.getUUID(), step, maid.position());
+            failClaimed(maid, gameTime);
+            goDown(level, maid);
+        }
+    }
+
+    /** Back along the scaffolding to a column on the ground, then down it. */
+    private void walkBack(EntityMaid maid) {
+        if (stepAlong(maid)) {
+            List<BlockPos> column = job.scaffoldColumns().get(BuildJob.columnKey(walk.get(walk.size() - 1)));
+            if (column != null) base = column.get(0);
+            enter(Stage.DESCEND);
+        } else if (stepTicks > STEP_TIMEOUT) {
+            MaidBuilder.LOGGER.debug("Maid {} could not walk back along the scaffolding: at {}", maid.getUUID(), maid.position());
+            enter(Stage.DESCEND);
+        }
+    }
+
+    /**
+     * Moves towards the current step of the walk; true once the last one is reached. The steps are
+     * single blocks on top of scaffolding, so she is steered directly (no path finding).
+     */
+    private boolean stepAlong(EntityMaid maid) {
+        holdStill(maid);
+        maid.setShiftKeyDown(false);
+        maid.resetFallDistance();
+        stepTicks++;
+        BlockPos step = walk.get(walkIndex);
+        Vec3 centre = Vec3.atBottomCenterOf(step);
+        if (maid.position().subtract(centre).horizontalDistanceSqr() < 0.2 * 0.2 && Math.abs(maid.getY() - step.getY()) < 0.3) {
+            stepTicks = 0;
+            if (++walkIndex >= walk.size()) return true;
+            step = walk.get(walkIndex);
+            centre = Vec3.atBottomCenterOf(step);
+        }
+        maid.getMoveControl().setWantedPosition(centre.x, centre.y, centre.z, speed);
+        return false;
+    }
+
+    /** Down from where she is: on hanging scaffolding she first walks back to a column on the ground. */
+    private void goDown(ServerLevel level, EntityMaid maid) {
+        if (!ReachPlanner.grounded(level, base)) {
+            List<BlockPos> back = ReachPlanner.planReturn(level, job, maid.blockPosition());
+            if (back != null && !back.isEmpty()) {
+                startWalk(back, Stage.RETURN);
+                return;
+            }
+            if (back != null) {
+                List<BlockPos> column = job.scaffoldColumns().get(BuildJob.columnKey(maid.blockPosition()));
+                if (column != null) base = column.get(0);
+            }
+        }
+        enter(Stage.DESCEND);
     }
 
     /** Sneaking makes scaffolding let her through; the fall is slowed so she lands softly. */
@@ -346,6 +473,7 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
     @Override
     protected void stop(ServerLevel level, EntityMaid maid, long gameTime) {
         maid.setShiftKeyDown(false);
+        BuilderPlaceTask.stopBreaking(level, maid, session);
         maid.getBrain().eraseMemory(MemoryModuleType.WALK_TARGET);
         if (job != null) {
             job.release(maid.getUUID());
@@ -358,7 +486,7 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
 
     private static boolean containersHaveScaffolding(ServerLevel level, EntityMaid maid, BuildJob job) {
         double range = MaidBuilderConfig.MATERIAL_SOURCE_RANGE.get();
-        for (Map.Entry<BlockPos, IItemHandler> e : MaterialContainers.distinct(level, job.materialSources()).entrySet()) {
+        for (Map.Entry<BlockPos, IItemHandler> e : MaterialContainers.distinct(level, job.allMaterialSources(level.getServer())).entrySet()) {
             if (maid.distanceToSqr(Vec3.atCenterOf(e.getKey())) > range * range) continue;
             if (MaterialContainers.containsAny(e.getValue(), Map.of(Items.SCAFFOLDING, 1))) return true;
         }

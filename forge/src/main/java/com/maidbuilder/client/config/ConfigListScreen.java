@@ -21,9 +21,10 @@ import javax.annotation.Nullable;
 import java.util.List;
 
 /**
- * A page of settings: a toggle for each on/off setting and a text field for each number (only
- * values inside the allowed range are taken; others turn the field red). Changes apply at once, so
- * client settings such as the ghost opacity show up immediately; the file is saved when leaving.
+ * A page of settings: a toggle for each on/off setting, a button cycling through the values of each
+ * choice (enum) and a text field for each number (only values inside the allowed range are taken;
+ * others turn the field red). Nested groups get a button opening their own page. Changes apply at
+ * once, so client settings such as the ghost opacity show up immediately; the file is saved when leaving.
  */
 class ConfigListScreen extends Screen {
     private static final int COLOR_INVALID = 0xFF5555, COLOR_VALID = 0xE0E0E0;
@@ -31,23 +32,37 @@ class ConfigListScreen extends Screen {
     private final Screen parent;
     private final ForgeConfigSpec spec;
     private final List<ConfigEntry> entries;
+    private final List<ConfigEntry.Section> subsections;
     /** Why the values cannot be changed, or null if they can. */
     @Nullable
     private final Component readOnly;
     private boolean changed;
 
     ConfigListScreen(Screen parent, Component title, ForgeConfigSpec spec, List<ConfigEntry> entries, @Nullable Component readOnly) {
+        this(parent, title, spec, entries, List.of(), readOnly);
+    }
+
+    ConfigListScreen(Screen parent, Component title, ForgeConfigSpec spec, List<ConfigEntry> entries,
+                     List<ConfigEntry.Section> subsections, @Nullable Component readOnly) {
         super(title);
         this.parent = parent;
         this.spec = spec;
         this.entries = entries;
+        this.subsections = subsections;
         this.readOnly = readOnly;
     }
 
     @Override
     protected void init() {
         EntryList list = new EntryList(minecraft, width, height, 40, height - 36, 24);
-        for (ConfigEntry entry : entries) list.add(new Row(entry, control(entry)));
+        for (ConfigEntry entry : entries) list.add(new Row(entry.label(), tooltip(entry), control(entry)));
+        for (ConfigEntry.Section section : subsections) {
+            Button open = Button.builder(Component.translatable("maidbuilder.configuration.edit", section.label()),
+                            b -> minecraft.setScreen(new ConfigListScreen(this, section.label(), spec, section.entries(),
+                                    section.subsections(), readOnly)))
+                    .bounds(0, 0, 100, 20).tooltip(Tooltip.create(section.tooltip())).build();
+            list.add(new Row(section.label(), section.tooltip(), open));
+        }
         addRenderableWidget(list);
         addRenderableWidget(Button.builder(CommonComponents.GUI_DONE, b -> onClose())
                 .bounds(width / 2 - 100, height - 28, 200, 20).build());
@@ -55,7 +70,9 @@ class ConfigListScreen extends Screen {
 
     private AbstractWidget control(ConfigEntry entry) {
         AbstractWidget widget;
-        if (entry.isBoolean()) {
+        if (entry.isEnum()) {
+            widget = enumButton(entry);
+        } else if (entry.isBoolean()) {
             ForgeConfigSpec.BooleanValue value = (ForgeConfigSpec.BooleanValue) entry.value();
             widget = CycleButton.onOffBuilder(value.get()).displayOnlyValue()
                     .create(0, 0, 100, 20, entry.label(), (button, on) -> {
@@ -80,6 +97,22 @@ class ConfigListScreen extends Screen {
         widget.active = readOnly == null;
         if (widget instanceof EditBox box) box.setEditable(readOnly == null);
         return widget;
+    }
+
+    /** Cycles through the enum's constants, shown by name (OFF / REPLACE / ALL), as the 1.21.1 screen does. */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private AbstractWidget enumButton(ConfigEntry entry) {
+        ForgeConfigSpec.EnumValue value = (ForgeConfigSpec.EnumValue) entry.value();
+        Enum<?> current = (Enum<?>) value.get();
+        List<Enum<?>> constants = List.of(current.getDeclaringClass().getEnumConstants());
+        return CycleButton.<Enum<?>>builder(e -> Component.literal(e.name()))
+                .withValues(constants)
+                .withInitialValue(current)
+                .displayOnlyValue()
+                .create(0, 0, 100, 20, entry.label(), (button, chosen) -> {
+                    value.set(chosen);
+                    changed = true;
+                });
     }
 
     private static Component tooltip(ConfigEntry entry) {
@@ -107,11 +140,13 @@ class ConfigListScreen extends Screen {
     }
 
     private final class Row extends ContainerObjectSelectionList.Entry<Row> {
-        private final ConfigEntry entry;
+        private final Component label;
+        private final Component tooltip;
         private final AbstractWidget control;
 
-        Row(ConfigEntry entry, AbstractWidget control) {
-            this.entry = entry;
+        Row(Component label, Component tooltip, AbstractWidget control) {
+            this.label = label;
+            this.tooltip = tooltip;
             this.control = control;
         }
 
@@ -119,11 +154,11 @@ class ConfigListScreen extends Screen {
         public void render(GuiGraphics graphics, int index, int top, int left, int width, int height,
                            int mouseX, int mouseY, boolean hovering, float partialTick) {
             int textY = top + (height - font.lineHeight) / 2;
-            graphics.drawString(font, entry.label(), left, textY, 0xFFFFFF);
+            graphics.drawString(font, label, left, textY, 0xFFFFFF);
             control.setX(left + width - control.getWidth() - (control instanceof EditBox ? 1 : 0));
             control.setY(top + (height - control.getHeight()) / 2);
             control.render(graphics, mouseX, mouseY, partialTick);
-            if (hovering && mouseX < control.getX()) setTooltipForNextRenderPass(font.split(tooltip(entry), 240));
+            if (hovering && mouseX < control.getX()) setTooltipForNextRenderPass(font.split(tooltip, 240));
         }
 
         @Override

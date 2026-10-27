@@ -1,5 +1,12 @@
 package com.maidbuilder.client;
 
+import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.core.Direction;
+import com.maidbuilder.network.TerritoryPayloads;
+import com.maidbuilder.client.territory.TerritoryScreen;
+import com.maidbuilder.client.territory.ClientTerritories;
+import com.maidbuilder.client.territory.BuildMode;
 import com.maidbuilder.MaidBuilder;
 import com.maidbuilder.core.math.IntPos;
 import com.maidbuilder.core.schematic.LitematicWriter;
@@ -28,7 +35,8 @@ import java.util.UUID;
  * enough to be uploaded in several chunks), confirms it with sneak + use so the server asks for
  * the upload, checks that the wand gets linked and that job status and the material report arrive,
  * then has the server capture an area with {@code /maidbuilder save} and checks the downloaded
- * file. Every result is logged as {@code [nettest] PASS/FAIL ...}; the game closes at the end.
+ * file; then places a territory flag, opens its screen, downloads a template structure for build
+ * mode and removes the territory again. Every result is logged as {@code [nettest] PASS/FAIL ...}; the game closes at the end.
  */
 final class ClientNetSelfTest {
     static final boolean ENABLED = Boolean.getBoolean("maidbuilder.nettest");
@@ -39,6 +47,9 @@ final class ClientNetSelfTest {
     private static int ticks = -1;
     private static boolean failed;
     private static BlockPos origin = BlockPos.ZERO;
+    private static BlockPos flag = BlockPos.ZERO;
+    @javax.annotation.Nullable
+    private static UUID territory;
 
     private ClientNetSelfTest() {
     }
@@ -51,7 +62,7 @@ final class ClientNetSelfTest {
         } catch (RuntimeException | IOException e) {
             fail("exception " + e);
             MaidBuilder.LOGGER.error("[nettest]", e);
-            ticks = 400;
+            ticks = 600;
         }
     }
 
@@ -109,7 +120,7 @@ final class ClientNetSelfTest {
                     Payloads.JobStatus status = ClientPayloadHandler.status(job);
                     check(status != null && status.total() > 0, "JobStatus received: " + (status == null ? null : status.done() + "/" + status.total()));
                 }
-                ModNetwork.sendToServer(new Payloads.RequestMaterialReport(true));
+                ModNetwork.sendToServer(new Payloads.RequestMaterialReport(java.util.Optional.empty(), true));
             }
             case 230 -> {
                 check(mc.screen instanceof MaterialListScreen, "MaterialReport opened the material list (" + mc.screen + ")");
@@ -121,13 +132,47 @@ final class ClientNetSelfTest {
             case 300 -> {
                 Path file = ClientSchematics.folder().resolve(CAPTURE + ".litematic");
                 check(Files.isRegularFile(file) && Files.size(file) > 0, "captured blueprint downloaded to " + file);
+                mc.player.connection.sendCommand("clear @s");
+                mc.player.connection.sendCommand("give @s maidbuilder:territory_flag");
+            }
+            // territory: place a flag, open its screen, download a template's structure, remove it again
+            case 330 -> {
+                BlockPos ground = mc.player.blockPosition().relative(mc.player.getDirection(), 3).below();
+                flag = ground.above();
+                mc.gameMode.useItemOn(mc.player, InteractionHand.MAIN_HAND,
+                        new BlockHitResult(Vec3.atCenterOf(ground).add(0, 0.5, 0), Direction.UP, ground, false));
+            }
+            case 370 -> {
+                TerritoryPayloads.TerritoryInfo info = ClientTerritories.at(flag);
+                check(info != null && info.flag().equals(flag), "TerritoryList synced the new territory at " + flag);
+                territory = info == null ? null : info.id();
+                check(!ClientTerritories.templates().isEmpty(), "TemplateList received: " + ClientTerritories.templates().size() + " templates");
+                mc.player.connection.sendCommand("clear @s");
+            }
+            case 380 -> mc.gameMode.useItemOn(mc.player, InteractionHand.MAIN_HAND,
+                    new BlockHitResult(Vec3.atCenterOf(flag), mc.player.getDirection().getOpposite(), flag, false));
+            case 410 -> {
+                check(mc.screen instanceof TerritoryScreen, "TerritoryReport opened the territory screen (" + mc.screen + ")");
+                mc.setScreen(null);
+                TerritoryPayloads.TemplateInfo dormitory = ClientTerritories.template(MaidBuilder.id("dormitory"));
+                check(dormitory != null, "the dormitory template is listed");
+                if (territory != null && dormitory != null) BuildMode.start(territory, dormitory);
+            }
+            case 450 -> {
+                check(BuildMode.loaded() != null, "TemplateStructure downloaded for build mode");
+                BuildMode.stop();
+                if (territory != null) mc.player.connection.sendCommand("maidbuilder territory remove " + territory);
+                mc.player.connection.sendCommand("setblock " + flag.getX() + " " + flag.getY() + " " + flag.getZ() + " air");
+            }
+            case 480 -> {
+                check(territory != null && ClientTerritories.get(territory) == null, "territory removed and the list synced");
                 MaidBuilder.LOGGER.info("[nettest] {}", failed ? "SOME CHECKS FAILED" : "ALL CHECKS PASSED");
                 mc.player.connection.sendCommand("stop"); // saves the world: the job must survive the restart
             }
-            case 320 -> {
+            case 500 -> {
                 mc.stop();
             }
-            case 400 -> mc.stop();
+            case 600 -> mc.stop();
             default -> {
             }
         }

@@ -39,4 +39,9 @@ public record Schematic(int formatVersion, int formatSubVersion, int minecraftDa
     public void forEachBlock(SchematicRegion.BlockVisitor visitor) {
         for (SchematicRegion r : regions) r.forEachBlock(visitor);
     }
+
+    /** Visits the cells of all regions that are explicitly air (structure voids are left out). */
+    public void forEachAir(SchematicRegion.AirVisitor visitor) {
+        for (SchematicRegion r : regions) r.forEachAir(visitor);
+    }
 }

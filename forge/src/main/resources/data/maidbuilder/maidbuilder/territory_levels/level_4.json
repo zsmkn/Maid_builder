@@ -1,0 +1,10 @@
+{
+  "level": 4,
+  "radius": 72,
+  "prosperity": 160,
+  "required_buildings": [ { "category": "production", "count": 3 } ],
+  "upgrade_items": { "minecraft:diamond": 8, "touhou_little_maid:hakurei_gohei": 1 },
+  "resident_points": 4,
+  "resident_cap": 8,
+  "bonuses": [ "no_hostile_spawns" ]
+}

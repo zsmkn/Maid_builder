@@ -38,6 +38,10 @@ record ConfigEntry(ForgeConfigSpec spec, ForgeConfigSpec.ConfigValue<?> value) {
         return value instanceof ForgeConfigSpec.BooleanValue;
     }
 
+    boolean isEnum() {
+        return value instanceof ForgeConfigSpec.EnumValue<?>;
+    }
+
     /** Parses and validates text typed for a number setting; null if it is not allowed. */
     @Nullable
     Object parse(String text) {
@@ -56,8 +60,15 @@ record ConfigEntry(ForgeConfigSpec spec, ForgeConfigSpec.ConfigValue<?> value) {
         ((ForgeConfigSpec.ConfigValue<Object>) value).set(newValue);
     }
 
-    /** A titled group of settings: one page of the server settings, or all client settings. */
-    record Section(String key, List<ConfigEntry> entries) {
+    /**
+     * A titled group of settings: one page of the server settings, or all client settings.
+     * {@code subsections} are nested groups (the territory bonuses), opened from a row of the page.
+     */
+    record Section(String key, List<ConfigEntry> entries, List<Section> subsections) {
+        Section(String key, List<ConfigEntry> entries) {
+            this(key, entries, List.of());
+        }
+
         Component label() {
             return Component.translatable(key);
         }

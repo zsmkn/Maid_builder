@@ -10,7 +10,7 @@ import net.minecraft.network.chat.Component;
 
 import javax.annotation.Nullable;
 
-/** The groups of the server settings ("Building", "Schematics"), each opening its own page. */
+/** The groups of the server settings ("Building", "Schematics", "Territory"), each opening its own page. */
 class ServerSectionsScreen extends Screen {
     private final Screen parent;
     @Nullable
@@ -29,7 +29,7 @@ class ServerSectionsScreen extends Screen {
         for (ConfigEntry.Section section : ConfigSections.server()) {
             Component label = Component.translatable("maidbuilder.configuration.edit", section.label());
             addRenderableWidget(Button.builder(label, b -> minecraft.setScreen(new ConfigListScreen(this, section.label(),
-                            MaidBuilderConfig.SPEC, section.entries(), ConfigOverviewScreen.serverReadOnlyReason())))
+                            MaidBuilderConfig.SPEC, section.entries(), section.subsections(), ConfigOverviewScreen.serverReadOnlyReason())))
                     .tooltip(Tooltip.create(section.tooltip()))
                     .bounds(x, y, 200, 20).build());
             y += 24;

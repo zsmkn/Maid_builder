@@ -1,8 +1,8 @@
 # Maid Builder（女僕建造）
 
-[Touhou Little Maid](https://github.com/TartaricAcid/TouhouLittleMaid) 的附屬模組：讓女僕依照 `.litematic` 藍圖，用自己背包裡的方塊自動蓋房子。
+[Touhou Little Maid](https://github.com/TartaricAcid/TouhouLittleMaid) 的附屬模組：讓女僕依照 `.litematic`／`.nbt` 藍圖，用自己背包和材料箱裡的方塊自動蓋房子；還能插上領地旗幟，用內建建築模板經營女僕小鎮。
 
-An add-on for Touhou Little Maid: maids build structures from Litematica `.litematic` blueprints using blocks from their own inventory.
+An add-on for Touhou Little Maid: maids build structures from `.litematic` / `.nbt` blueprints using blocks from their inventory and material chests, and you can grow a maid town from built-in templates in your own territory.
 
 | 項目 | 版本 |
 |---|---|
@@ -13,15 +13,17 @@ An add-on for Touhou Little Maid: maids build structures from Litematica `.litem
 
 > 不依賴 Litematica / Forgematica；只讀取它們的檔案格式。
 
-> **正式版 1.0.0（Minecraft 1.20.1／Forge）**：1.21.1 NeoForge 版 1.0.0 的移植，功能、指令、按鍵、設定項與存檔欄位都相同（移植紀錄見 [plan.md](plan.md)）。建議在大型存檔中使用前先備份世界。
+> **1.1.0（Minecraft 1.20.1／Forge）**：1.21.1 NeoForge 版 1.1.0 的移植，新增領地與建設、拆除錯誤方塊、鷹架橫向延伸；功能、指令、按鍵、設定項、存檔欄位與資料包格式都與 1.21.1 版相同（移植紀錄見 [plan.md](plan.md)）。建議在大型存檔中使用前先備份世界。
 
 ### 與 1.21.1 版的差異
 
-- 設定畫面為本模組自己的畫面（Forge 1.20.1 沒有 NeoForge 的設定畫面），選項、分組與說明文字相同。
+- 設定畫面為本模組自己的畫面（Forge 1.20.1 沒有 NeoForge 的設定畫面），選項、分組與說明文字相同；拆除模式以按鈕切換 OFF／REPLACE／ALL，領地加成在「領地」頁內的「Level bonuses...」子頁。
 - 光影相容支援 **Oculus**（Iris 的 Forge 版）＋ Embeddium。
 - 材料箱只能是有方塊實體的容器（箱子、木桶、漏斗……）；堆肥桶這類沒有方塊實體的方塊在 Forge 1.20.1 不算容器。
 - 藍圖裡 1.20.1 沒有的方塊（例如 1.20.3 以後的合成器、銅燈）會變成空氣，並列在 `/maidbuilder info` 與 `/maidbuilder job info` 中；`short_grass`（1.20.3 改名）會自動對應回 1.20.1 的 `grass`。
 - 原版 1.20.1 的鐘與飾紋陶罐本身不支援旋轉／鏡像，藍圖旋轉後它們維持原本朝向（與原版結構方塊相同）。
+- 模板的產物清單使用 Forge 的標籤：`#forge:crops`、`#forge:seeds`、`#forge:leather`、`#forge:feathers`、`#forge:eggs`（1.21.1 為 `#c:` 標籤）；Forge 1.20.1 沒有生肉／生魚標籤，牧場與漁場直接列出原版的生肉（牛、豬、雞、羊、兔）與魚（鱈魚、鮭魚、熱帶魚、河豚）。`never_break` 標籤裡的試煉生怪磚、寶庫在 1.20.1 不存在，標成選用（`required: false`）。
+- 「不生成敵對生物」加成的生怪磚選項只對一般生怪磚有效（1.20.1 沒有試煉生怪磚）。
 
 ## 使用方式
 
@@ -31,6 +33,7 @@ An add-on for Touhou Little Maid: maids build structures from Litematica `.litem
 |---|---|
 | 藍圖魔杖 | TLM **祭壇**：鐵鎬、鐵鏟、鐵斧、鐵鋤、鐵頭盔、蛋糕（0.2 P 點） |
 | 藍圖羽毛筆 | 工作台（無序）：紙、羽毛、青金石 |
+| 領地旗幟 | 工作台（有序）：上排金錠、任意旗幟、金錠，下面兩排正中各一根木棒 |
 
 ### 建造
 
@@ -48,7 +51,12 @@ An add-on for Touhou Little Maid: maids build structures from Litematica `.litem
    - 潛行＋右鍵**兩次**：取消這個建造工作並解除連結（女僕會停工、拆掉已搭的鷹架）；已完成的工作按一次即可解除連結
 4. 建議開啟女僕的「家模式」，材料箱放在她的工作範圍內（TLM 預設半徑 12）；未開家模式時她只蓋主人附近 16 格內的方塊。
 5. **大型建築**：開家模式時，女僕在建造期間可以離開 TLM 的工作範圍去蓋整棟建築（不會被傳送回工作點），完工後自動恢復原本的工作範圍，不需要調整 TLM 設定。
-6. **高處的方塊**：她會先在建築周圍（建築範圍外加 8 格的圓內）找能走上去的路；找不到就用背包裡的**鷹架**自己搭上去蓋，完工後把鷹架全部收回。身上和材料箱都沒有鷹架時，她會通知你，並先去蓋其他方塊。
+6. **高處的方塊**：她會先在建築周圍（建築範圍外加 8 格的圓內）找能走上去的路；找不到就用背包裡的**鷹架**自己搭上去蓋；在鷹架上時，同高度旁邊的方塊她會往側面接鷹架（最多懸空 6 格）走過去蓋，不必每次都下來換柱。完工後把鷹架全部收回。身上和材料箱都沒有鷹架時，她會通知你，並先去蓋其他方塊。
+7. **錯誤的方塊**：預設（`clearMode = REPLACE`）藍圖有方塊的位置若放著別的方塊，她會先拆掉再換成正確的；拆下來的東西放進她的背包（背包滿了會掉在地上）。設成 `ALL` 時，藍圖中的**空氣格**也會清空，但只清「同一層、離藍圖方塊水平 5 格（圓形，`clearRadius`）以內」的格子：藍圖框很大、建築很小時不會整框清光，建築下方的地面和屋頂上方也不會動。清除時由上往下拆。
+   - 一律不拆：箱子等有方塊實體的方塊、基岩等無法破壞的方塊、比 `maxBreakHardness`（預設 5，黑曜石不拆）硬的方塊、方塊標籤 `maidbuilder:never_break`（生怪磚、蟲蝕方塊、床、界伏盒…）。這些會列為「需玩家處理」。
+   - 拆除前會發出玩家破壞事件（以工作擁有者的身分），領地保護模組可以阻止。
+   - 用藍圖魔杖放置時，會被清除的方塊在預覽中以**橘框**標出。
+   - 原版 `.nbt` 的結構空位不會清除；已有的工作可用 `/maidbuilder job clearing` 修改，切換時已完成的進度會保留。
 
 ### 建立藍圖（藍圖羽毛筆）
 
@@ -61,7 +69,35 @@ An add-on for Touhou Little Maid: maids build structures from Litematica `.litem
 2. 對空氣右鍵，輸入檔名 → 儲存到 `schematics/<檔名>.litematic`，可以直接用藍圖魔杖選取。
 3. 潛行＋右鍵清除選取。只保存方塊（不含箱子內容、告示牌文字與實體）。
 
-手持魔杖時左上角 HUD 會顯示預覽狀態（正確／缺少／錯誤），連結工作後改顯示進度與缺料清單。預覽中：半透明方塊＝待放，紅框＝放錯的方塊，淺藍框＝箱子、床等無法預覽模型的方塊。
+### 領地與建設
+
+1. **放置領地旗幟**：旗幟四周的正方形成為你的領地（等級 1 半徑 48 格，升級後擴大）。每位玩家最多 10 個領地，任兩支旗幟（不分玩家）至少相隔 10 個區塊。手持旗幟或按 `G` 顯示領地邊界。
+   - 拆掉旗幟：領地停止運作（佇列中的工作暫停、加成停止），資料保留；在原領地範圍內重新放旗幟即可接手，不佔新名額。其他玩家不能在停用的領地內放旗幟。
+2. **右鍵旗幟**開啟領地介面：
+   - **概況**：等級、範圍、繁榮度（建築＋居民）、下一級的條件與要繳交的物品（從背包和領地材料箱扣除）、「升級」按鈕、目前與下一級的加成。
+   - **建設**：建造佇列（可調整順序、看材料、取消）、「建造模式」、「綁定材料箱」（之後右鍵容器即可加入／移除；潛行＋右鍵結束）。
+   - **建築**：已登記的建築與完整度；少於 80% 會「需修復」並停止計算，按「修復」排入修復工作；✕（按兩次）取消登記。
+   - **女僕**：領地內的女僕、背包狀態；「建築師」＝把她切換為建築師任務（沒有自己工作的建築師會依序建造領地佇列）；「工作地點…」＝從領地內所有可工作的建築中選一個（溫室、牧場等，使用 TLM 的對應任務）；「存放倉庫」＝把產物送進倉庫。
+   - 自己在建築旁把女僕設成該建築的工作（家模式工作點在建築內、任務相同）也會自動登記為在該建築工作；改成別的任務或把家搬走就會取消。
+3. **建造模式**：在自己的領地內按 `Caps Lock`（可在控制設定中修改；某些輸入法會用 Caps Lock 切換中英文，衝突時請改鍵）或在建設頁按「建造模式」→ 選模板。模板會跟著準星移動（底部貼在看著的地面上），`R` 旋轉、`M` 鏡像、`PgUp`/`PgDn` 調整高度、`B` 材料清單，**右鍵**排入建造佇列，左鍵離開。超出領地、與其他建築重疊、蓋住旗幟或等級不夠時預覽變紅，不能放置。
+   - 自己的藍圖：在領地內用藍圖魔杖放置的工作也會加入領地佇列（使用領地材料箱），但不登記為建築、不計繁榮度。
+4. **繁榮度**＝運作中的模板建築＋居民女僕（在領地內開啟家模式的女僕，每級有計入上限）。升級條件（預設）：
+
+   | 等級 | 半徑 | 繁榮度 | 指定建築 | 繳交物品 | 加成 |
+   |---|---|---|---|---|---|
+   | 2 | 56 | 30 | 倉庫 | 任意原木 ×64、鐵錠 ×16 | 女僕在領地內緩慢回血 |
+   | 3 | 64 | 80 | 溫室、牧場 | 金錠 ×16、蛋糕 ×4 | 溫室作物加速、牧場繁殖冷卻減半 |
+   | 4 | 72 | 160 | 3 種生產建築 | 鑽石 ×8、博麗御幣 ×1 | 不生成敵對生物 |
+   | 5 | 79 | 300 | 5 種生產建築 | 綠寶石 ×32、鑽石磚 ×2 | — |
+
+5. **在建築工作的女僕**：背包滿了會自動改為休息並通知你；你拿走物品或讓她「存放倉庫」（只存放該建築定義的產物，例如溫室的作物與種子，會保留一些種子）後，她會回去工作；背包空出一半時也會自動恢復。這是方便功能，不影響繁榮度。
+
+等級、模板與加成都由資料包定義，模組包可以覆寫或新增：
+- 等級：`data/<命名空間>/maidbuilder/territory_levels/*.json`
+- 模板：`data/<命名空間>/maidbuilder/templates/<id>.json`，結構檔放在 `data/<命名空間>/maidbuilder/structures/<路徑>.litematic`（或 `.nbt`）。內建的 11 個模板由 `tools/TemplateGenerator.java` 產生，只用基本材料。
+- 完整度不計入的裝飾方塊：方塊標籤 `maidbuilder:integrity_ignored`
+
+手持魔杖時左上角 HUD 會顯示預覽狀態（正確／缺少／錯誤），連結工作後改顯示進度與缺料清單。預覽中：半透明方塊＝待放，紅框＝放錯的方塊，橘框＝拆除模式為 `ALL` 時女僕會從藍圖空氣格中清掉的方塊（放置前就能確認會不會拆到旁邊的建築），淺藍框＝箱子、床等無法預覽模型的方塊。
 
 指令：
 
@@ -73,27 +109,32 @@ An add-on for Touhou Little Maid: maids build structures from Litematica `.litem
 | `/maidbuilder job create <檔名> <x y z> [旋轉] [鏡像]` | 用指令建立工作並取得魔杖 |
 | `/maidbuilder job list` / `info <id>` | 工作列表／進度、材料箱與剩餘材料 |
 | `/maidbuilder job retry <id>` | 把「需玩家處理」的方塊重新排入佇列 |
+| `/maidbuilder job clearing <id> [off\|replace\|all] [半徑]` | 查看／修改這個工作的拆除模式（只寫 id 為查看） |
 | `/maidbuilder job bind <id> <女僕>` | 用指令綁定女僕 |
 | `/maidbuilder job wand <id>` / `remove <id>` | 重新取得魔杖／取消並刪除工作（女僕會先拆鷹架） |
 | `/maidbuilder save <檔名> <from> <to>` | 把區域存成藍圖到自己的 `schematics/`（需 OP） |
+| `/maidbuilder territory list` / `info <id>` | 自己的領地（OP：全部）／等級、繁榮度、佇列 |
+| `/maidbuilder territory remove <id>` | 永久刪除領地（擁有者或 OP），釋出旗幟名額 |
+| `/maidbuilder territory setlevel <id> <等級>` | 直接設定領地等級（需 OP） |
 
 **設定畫面**：主選單或暫停選單 →「模組」→ Maid Builder →「設定」。每個選項都有說明（滑鼠移到選項上）。
 
 - **客戶端設定**（`config/maidbuilder-client.toml`）：HUD 開關、預覽不透明度、預覽顯示距離、錯誤方塊紅框、範圍框、光影相容模式。在多人伺服器上也能改。
-  - **光影相容模式**（預設開）：使用 Oculus 光影包時，預覽會畫在光影處理之後，維持清楚的半透明外觀（光影包會把預覽照得像真的方塊）。已用 Oculus 1.8.0 + Embeddium 0.3.31，搭配 BSL 與 Complementary Reimagined 測試。
-- **伺服器設定**（`<world>/serverconfig/maidbuilder-server.toml`）：放置距離、流體、重試次數、材料箱距離、找路範圍 `workAreaMargin`、鷹架開關 `useScaffolding` 與最高 `maxScaffoldHeight`、上傳與擷取大小上限等。只能在單人世界（未開放區網）的設定畫面中修改，其他情況畫面會顯示為唯讀；多人伺服器請由管理員直接編輯這個檔案。
+  - **光影相容模式**（預設開）：使用 Oculus 光影包時，預覽、橘框與領地邊界會畫在光影處理之後，維持清楚的半透明外觀（光影包會把預覽照得像真的方塊）。已用 Oculus 1.8.0 + Embeddium 0.3.31，搭配 BSL 與 Complementary Reimagined 測試。
+- **伺服器設定**（`<world>/serverconfig/maidbuilder-server.toml`）：放置距離、流體、重試次數、材料箱距離、找路範圍 `workAreaMargin`、鷹架開關 `useScaffolding` 與最高 `maxScaffoldHeight`、拆除模式 `clearMode`／清除半徑 `clearRadius`／可拆除的最大硬度 `maxBreakHardness`、上傳與擷取大小上限、領地（每人領地數 `maxFlagsPerPlayer`、旗幟間距 `minFlagDistanceChunks`、恢復工作的背包空位比例、各項加成的開關與數值）等。只能在單人世界（未開放區網）的設定畫面中修改，其他情況畫面會顯示為唯讀；多人伺服器請由管理員直接編輯這個檔案。
 
 ## 開發
 
 ```bash
 ./gradlew build                          # 編譯 + core 單元測試，產出 forge/build/libs/maidbuilder-release_<版本>_forge1.20.1.jar（reobf）
 ./gradlew :core:test                     # 只跑 core 單元測試
-./gradlew :forge:runGameTestServer       # 遊戲內自動測試（26 個，含效能基準，log 中搜尋 BENCH）
+./gradlew :forge:runGameTestServer       # 遊戲內自動測試（47 個，含效能基準，log 中搜尋 BENCH）
 ./gradlew :forge:runClient               # 開發用客戶端（遊戲目錄：forge/run）
-./gradlew :forge:runClientSelfTest       # 渲染冒煙測試：需 forge/run/saves/selftest 世界，輸出 forge/run/screenshots/maidbuilder_selftest*.png
+./gradlew :forge:runClientSelfTest       # 渲染冒煙測試：需 forge/run/saves/selftest 世界，輸出 forge/run/screenshots/maidbuilder_selftest*.png（含拆除橘框、領地介面、建造模式）
+./gradlew :forge:runTemplateShowcase     # 內建模板外觀：在 selftest 世界貼上 11 個模板，輸出 maidbuilder_showcase_*.png 後清除
 ./gradlew :forge:runClientShaderTest -PshaderTest=true   # 同上，加上 Oculus + Embeddium（forge/runs/shaders，光影包放 shaderpacks/）
 ./gradlew :forge:runServer               # 開發用專用伺服器（forge/run）
-./gradlew :forge:runClientNetTest        # 連到本機專用伺服器的網路冒煙測試（上傳、工作、材料清單、擷取下載；Dev 需為 OP）
+./gradlew :forge:runClientNetTest        # 連到本機專用伺服器的網路冒煙測試（上傳、工作、材料清單、擷取下載、領地與模板下載；Dev 需為 OP）
 ```
 
 - 建置需要 JDK 17（Gradle toolchain）。
@@ -103,8 +144,9 @@ An add-on for Touhou Little Maid: maids build structures from Litematica `.litem
 ### 專案結構
 
 ```
-core/    純 Java 17，不依賴 Minecraft：NBT、.litematic 解析、座標與屬性轉換、BuildPlanner、材料清單
-forge/   Forge 1.20.1 模組本體：StateResolver、BuildJob、女僕任務、指令、藍圖魔杖、羽毛筆、GameTest
+core/    純 Java 17，不依賴 Minecraft：NBT、.litematic 解析、座標與屬性轉換、BuildPlanner、材料清單、領地規則
+forge/   Forge 1.20.1 模組本體：StateResolver、BuildJob、女僕任務、指令、藍圖魔杖、羽毛筆、領地、GameTest
+tools/   TemplateGenerator.java：產生內建模板的 .litematic
 ```
 
 `core/` 不可 import `net.minecraft.*` / `net.minecraftforge.*` / `net.neoforged.*`。

@@ -3,6 +3,7 @@ package com.maidbuilder.network;
 import com.maidbuilder.MaidBuilder;
 import com.maidbuilder.common.capture.CaptureActions;
 import com.maidbuilder.common.capture.QuillActions;
+import com.maidbuilder.common.territory.TerritoryReports;
 import com.maidbuilder.common.wand.MaterialReports;
 import com.maidbuilder.common.wand.UploadManager;
 import com.maidbuilder.common.wand.WandActions;
@@ -44,11 +45,23 @@ public final class ModNetwork {
         toServer(Payloads.UploadChunk.class, Payloads.UploadChunk::encode, Payloads.UploadChunk::decode,
                 UploadManager::receive);
         toServer(Payloads.RequestMaterialReport.class, Payloads.RequestMaterialReport::encode, Payloads.RequestMaterialReport::decode,
-                (player, msg) -> MaterialReports.onRequest(player, msg.open()));
+                (player, msg) -> MaterialReports.onRequest(player, msg.job().orElse(null), msg.open()));
         toServer(Payloads.QuillAdjust.class, Payloads.QuillAdjust::encode, Payloads.QuillAdjust::decode,
                 (player, msg) -> QuillActions.adjust(player, msg.grow(), msg.amount()));
         toServer(Payloads.CaptureRequest.class, Payloads.CaptureRequest::encode, Payloads.CaptureRequest::decode,
                 CaptureActions::onRequest);
+
+        toServer(TerritoryPayloads.RequestTerritoryReport.class, TerritoryPayloads.RequestTerritoryReport::encode, TerritoryPayloads.RequestTerritoryReport::decode,
+                (player, msg) -> TerritoryReports.onRequest(player, msg.territory(), msg.open()));
+        toServer(TerritoryPayloads.TerritoryAction.class, TerritoryPayloads.TerritoryAction::encode, TerritoryPayloads.TerritoryAction::decode,
+                com.maidbuilder.common.territory.TerritoryActions::handle);
+        toServer(TerritoryPayloads.RequestTemplate.class, TerritoryPayloads.RequestTemplate::encode, TerritoryPayloads.RequestTemplate::decode,
+                (player, msg) -> com.maidbuilder.common.territory.TemplatePlacement.sendStructure(player, msg.id()));
+        toServer(TerritoryPayloads.PlaceTemplate.class, TerritoryPayloads.PlaceTemplate::encode, TerritoryPayloads.PlaceTemplate::decode,
+                (player, msg) -> {
+                    boolean ok = com.maidbuilder.common.territory.TemplatePlacement.place(player, msg) != null;
+                    sendToPlayer(player, new TerritoryPayloads.PlaceResult(ok));
+                });
 
         toClient(Payloads.RequestUpload.class, Payloads.RequestUpload::encode, Payloads.RequestUpload::decode,
                 msg -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () -> com.maidbuilder.client.ClientPayloadHandler.onRequestUpload(msg)));
@@ -58,6 +71,18 @@ public final class ModNetwork {
                 msg -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () -> com.maidbuilder.client.ClientPayloadHandler.onMaterialReport(msg)));
         toClient(Payloads.DownloadChunk.class, Payloads.DownloadChunk::encode, Payloads.DownloadChunk::decode,
                 msg -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () -> com.maidbuilder.client.ClientDownloads.onChunk(msg)));
+        toClient(Payloads.ClearSettings.class, Payloads.ClearSettings::encode, Payloads.ClearSettings::decode,
+                msg -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () -> com.maidbuilder.client.ClientPayloadHandler.onClearSettings(msg)));
+        toClient(TerritoryPayloads.TemplateStructure.class, TerritoryPayloads.TemplateStructure::encode, TerritoryPayloads.TemplateStructure::decode,
+                msg -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () -> com.maidbuilder.client.territory.BuildMode.onStructure(msg)));
+        toClient(TerritoryPayloads.PlaceResult.class, TerritoryPayloads.PlaceResult::encode, TerritoryPayloads.PlaceResult::decode,
+                msg -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () -> com.maidbuilder.client.territory.BuildMode.onPlaceResult(msg)));
+        toClient(TerritoryPayloads.TerritoryList.class, TerritoryPayloads.TerritoryList::encode, TerritoryPayloads.TerritoryList::decode,
+                msg -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () -> com.maidbuilder.client.territory.ClientTerritories.set(msg)));
+        toClient(TerritoryPayloads.TerritoryReport.class, TerritoryPayloads.TerritoryReport::encode, TerritoryPayloads.TerritoryReport::decode,
+                msg -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () -> com.maidbuilder.client.territory.ClientTerritories.onReport(msg)));
+        toClient(TerritoryPayloads.TemplateList.class, TerritoryPayloads.TemplateList::encode, TerritoryPayloads.TemplateList::decode,
+                msg -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () -> com.maidbuilder.client.territory.ClientTerritories.setTemplates(msg)));
     }
 
     private static <T> void toServer(Class<T> type, BiConsumer<T, FriendlyByteBuf> encoder, Function<FriendlyByteBuf, T> decoder,
@@ -83,6 +108,10 @@ public final class ModNetwork {
 
     public static void sendToPlayer(ServerPlayer player, Object msg) {
         CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), msg);
+    }
+
+    public static void sendToAll(Object msg) {
+        CHANNEL.send(PacketDistributor.ALL.noArg(), msg);
     }
 
     public static void sendToServer(Object msg) {

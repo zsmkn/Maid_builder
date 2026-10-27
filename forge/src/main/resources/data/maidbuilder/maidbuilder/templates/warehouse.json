@@ -1,0 +1,9 @@
+{
+  "structure": "maidbuilder:warehouse",
+  "category": "storage",
+  "required_level": 1,
+  "prosperity": 10,
+  "storage": true,
+  "icon": "minecraft:chest",
+  "order": 0
+}
