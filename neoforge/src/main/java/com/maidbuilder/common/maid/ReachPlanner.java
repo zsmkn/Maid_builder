@@ -403,4 +403,71 @@ final class ReachPlanner {
         double cx = base.getX() + 0.5, cz = base.getZ() + 0.5;
         return Math.abs((box.minX + box.maxX) / 2 - cx) < 0.5 && Math.abs((box.minZ + box.maxZ) / 2 - cz) < 0.5;
     }
+
+    // ---- 4. a long way round on foot ----
+
+    /** Cells the ground search may look at: enough for a detour of some 60 blocks round a building. */
+    private static final int WALK_MAX_NODES = 16384;
+    private static final int MAX_DROP = 3;
+
+    /**
+     * A way on foot from where the maid stands to a spot whose bottom centre is within
+     * {@code within} blocks of the centre of {@code goal}: feet positions one step apart (up one
+     * block, down at most {@link #MAX_DROP}), through closed wooden doors too. Unlike the game's
+     * path finder it is not limited to the follow range, so it finds the long way out of a building
+     * whose wall stands between her and the goal. Null if there is none within the search budget.
+     */
+    @Nullable
+    static List<BlockPos> planWalk(ServerLevel level, EntityMaid maid, BlockPos goal, double within) {
+        record Node(BlockPos pos, int length, @Nullable Node from) {
+        }
+        Vec3 goalCentre = Vec3.atCenterOf(goal);
+        java.util.PriorityQueue<Node> open = new java.util.PriorityQueue<>(Comparator.comparingInt(
+                n -> n.length() + Math.abs(n.pos().getX() - goal.getX()) + Math.abs(n.pos().getZ() - goal.getZ())));
+        java.util.Set<BlockPos> seen = new java.util.HashSet<>();
+        BlockPos start = maid.blockPosition();
+        open.add(new Node(start, 0, null));
+        seen.add(start);
+        while (!open.isEmpty() && seen.size() < WALK_MAX_NODES) {
+            Node node = open.poll();
+            BlockPos at = node.pos();
+            if (Vec3.atBottomCenterOf(at).distanceToSqr(goalCentre) <= within * within) {
+                List<BlockPos> path = new ArrayList<>();
+                for (Node n = node; n.from() != null; n = n.from()) path.add(n.pos());
+                java.util.Collections.reverse(path);
+                return path;
+            }
+            boolean headroom = walkable(level, at.above(2));
+            for (int[] side : SIDES) {
+                BlockPos beside = at.offset(side[0], 0, side[1]);
+                if (!level.isLoaded(beside)) continue;
+                BlockPos next = null;
+                if (headroom && canWalkAt(level, maid, beside.above())) {
+                    next = beside.above();
+                } else if (walkable(level, beside) && walkable(level, beside.above())) {
+                    for (int drop = 0; drop <= MAX_DROP; drop++) {
+                        BlockPos feet = beside.below(drop);
+                        if (canWalkAt(level, maid, feet)) {
+                            next = feet;
+                            break;
+                        }
+                        if (!walkable(level, feet.below())) break;
+                    }
+                }
+                if (next != null && seen.add(next)) open.add(new Node(next, node.length() + 1, node));
+            }
+        }
+        return null;
+    }
+
+    /** Like {@link #canStandAt}, but closed wooden doors count as open: maids open them. */
+    private static boolean canWalkAt(Level level, EntityMaid maid, BlockPos feet) {
+        BlockPos below = feet.below();
+        return level.getBlockState(below).entityCanStandOn(level, below, maid)
+                && walkable(level, feet) && walkable(level, feet.above());
+    }
+
+    private static boolean walkable(Level level, BlockPos pos) {
+        return passable(level, pos) || net.minecraft.world.level.block.DoorBlock.isWoodenDoor(level.getBlockState(pos));
+    }
 }

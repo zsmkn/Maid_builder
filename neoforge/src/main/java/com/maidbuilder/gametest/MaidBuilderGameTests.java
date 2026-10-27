@@ -1086,6 +1086,9 @@ public final class MaidBuilderGameTests {
     private static volatile BlockPos denyBreakAt;
     @javax.annotation.Nullable
     private static volatile UUID lastBreakPlayer;
+    /** Only breaks inside this box set {@link #lastBreakPlayer}: other tests running alongside break blocks too. */
+    @javax.annotation.Nullable
+    private static volatile net.minecraft.world.phys.AABB watchBreaksIn;
     private static boolean breakListenerRegistered;
 
     private static void listenToBreaks() {
@@ -1093,7 +1096,8 @@ public final class MaidBuilderGameTests {
         breakListenerRegistered = true;
         net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.event.level.BlockEvent.BreakEvent e) -> {
             if (!(e.getPlayer() instanceof net.neoforged.neoforge.common.util.FakePlayer)) return;
-            lastBreakPlayer = e.getPlayer().getUUID();
+            net.minecraft.world.phys.AABB watched = watchBreaksIn;
+            if (watched != null && watched.contains(net.minecraft.world.phys.Vec3.atCenterOf(e.getPos()))) lastBreakPlayer = e.getPlayer().getUUID();
             if (e.getPos().equals(denyBreakAt)) e.setCanceled(true);
         });
     }
@@ -1177,6 +1181,95 @@ public final class MaidBuilderGameTests {
         });
     }
 
+    // ---- fetching around a half-built house: the chest is behind the wall, the way out on the far side ----
+
+    /** Square house with plank walls {@code height} high and a doorway in the middle of the west wall. */
+    private static Schematic houseSchematic(int size, int height) {
+        LitematicWriter.RegionBuilder rb = new LitematicWriter.RegionBuilder("house", IntPos.ZERO, new IntPos(size, height, size));
+        for (int x = 0; x < size; x++) {
+            for (int z = 0; z < size; z++) {
+                boolean edge = x == 0 || z == 0 || x == size - 1 || z == size - 1;
+                if (!edge) continue;
+                for (int y = 0; y < height; y++) {
+                    if (x == 0 && z == size / 2 && y < 2) continue;
+                    rb.set(x, y, z, "minecraft:oak_planks");
+                }
+            }
+        }
+        return LitematicWriter.schematic("house", 3955, List.of(rb.build()));
+    }
+
+    /** Walls two high: standing on the ring she can climb over the east wall. */
+    @GameTest(template = FLOOR, batch = "pathing_low", timeoutTicks = 2400)
+    public static void maidFetchesOverLowWall(GameTestHelper helper) {
+        fetchAroundHouse(helper, 13, 2, "low wall");
+    }
+
+    /** Walls three high: the only way to the chest is out through the doorway on the far side. */
+    @GameTest(template = FLOOR, batch = "pathing_high", timeoutTicks = 2400)
+    public static void maidFetchesAroundHouse(GameTestHelper helper) {
+        fetchAroundHouse(helper, 13, 3, "around house");
+    }
+
+    /** A bigger house: the way round is longer than the path finder's range. */
+    @GameTest(template = FLOOR, batch = "pathing_big", timeoutTicks = 2400)
+    public static void maidFetchesAroundBigHouse(GameTestHelper helper) {
+        fetchAroundHouse(helper, 21, 3, "around big house");
+    }
+
+    /**
+     * Open ground around a house whose walls stand {@code built} layers high (the job wants one
+     * more); the maid, empty-handed, is inside next to the east wall within a ring of 1-high
+     * blocks, the chest is outside behind that wall. Logs how long until she has the planks.
+     */
+    private static void fetchAroundHouse(GameTestHelper helper, int size, int built, String name) {
+        int minX = -10, maxX = size + 17, minZ = -14, maxZ = size + 13;
+        // the ground reaches past the test structure: keep those chunks loaded (and ticking)
+        java.util.List<net.minecraft.world.level.ChunkPos> forced = new java.util.ArrayList<>();
+        BlockPos lo = helper.absolutePos(new BlockPos(minX, 1, minZ)), hi = helper.absolutePos(new BlockPos(maxX, 1, maxZ));
+        for (int cx = Math.min(lo.getX(), hi.getX()) >> 4; cx <= Math.max(lo.getX(), hi.getX()) >> 4; cx++) {
+            for (int cz = Math.min(lo.getZ(), hi.getZ()) >> 4; cz <= Math.max(lo.getZ(), hi.getZ()) >> 4; cz++) {
+                if (helper.getLevel().setChunkForced(cx, cz, true)) forced.add(new net.minecraft.world.level.ChunkPos(cx, cz));
+            }
+        }
+        for (int x = minX; x <= maxX; x++) {
+            for (int z = minZ; z <= maxZ; z++) {
+                helper.setBlock(new BlockPos(x, 1, z), Blocks.STONE);
+                for (int y = 2; y <= 7; y++) helper.setBlock(new BlockPos(x, y, z), Blocks.AIR);
+            }
+        }
+        BlockPos origin = new BlockPos(0, 2, 0);
+        BuildJob job = createJob(helper, houseSchematic(size, built + 1), origin);
+        for (int x = 0; x < size; x++) {
+            for (int z = 0; z < size; z++) {
+                boolean edge = x == 0 || z == 0 || x == size - 1 || z == size - 1;
+                if (!edge) continue;
+                for (int y = 0; y < built; y++) {
+                    if (x == 0 && z == size / 2 && y < 2) continue;
+                    helper.setBlock(origin.offset(x, y, z), Blocks.OAK_PLANKS);
+                }
+            }
+        }
+        BlockPos spawn = origin.offset(size - 3, 0, size / 2);
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) if (dx != 0 || dz != 0) helper.setBlock(spawn.offset(dx, 0, dz), Blocks.COBBLESTONE);
+        }
+        BlockPos chestRel = origin.offset(size + 7, 0, size / 2);
+        helper.setBlock(chestRel, Blocks.CHEST);
+        BlockPos chestAbs = helper.absolutePos(chestRel);
+        IItemHandler chest = helper.getLevel().getCapability(net.neoforged.neoforge.capabilities.Capabilities.ItemHandler.BLOCK, chestAbs, null);
+        if (chest == null) throw new IllegalStateException("chest has no item handler");
+        ItemHandlerHelper.insertItemStacked(chest, new ItemStack(Items.OAK_PLANKS, 64 * 3), false);
+        job.toggleMaterialSource(chestAbs);
+        EntityMaid maid = spawnBuilderMaid(helper, job, spawn);
+        helper.succeedWhen(() -> {
+            if (count(maid.getAvailableInv(false), Items.OAK_PLANKS) == 0) helper.fail("no planks yet");
+            MaidBuilder.LOGGER.info("BENCH fetch {}: {} ticks", name, helper.getTick());
+            BuildJobManager.data(helper.getLevel().getServer()).remove(job.id());
+            for (net.minecraft.world.level.ChunkPos c : forced) helper.getLevel().setChunkForced(c.x, c.z, false);
+        });
+    }
+
     private static final BlockPos POST = new BlockPos(8, 2, 8);
 
     /**
@@ -1200,6 +1293,7 @@ public final class MaidBuilderGameTests {
         helper.setBlock(flower, Blocks.POPPY);
         helper.setBlock(chest, Blocks.CHEST);
         denyBreakAt = helper.absolutePos(denied);
+        watchBreaksIn = helper.getBounds();
 
         EntityMaid maid = spawnBuilderMaid(helper, job);
         IItemHandler inv = maid.getAvailableInv(false);
@@ -1223,6 +1317,7 @@ public final class MaidBuilderGameTests {
             if (countItem(inv, Items.POPPY) != 1) helper.fail("expected the poppy, got " + countItem(inv, Items.POPPY));
             if (!job.owner().equals(lastBreakPlayer)) helper.fail("break event fired as " + lastBreakPlayer + ", not the owner " + job.owner());
             denyBreakAt = null;
+            watchBreaksIn = null;
             BuildJobManager.data(helper.getLevel().getServer()).remove(job.id());
         });
     }
