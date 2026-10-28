@@ -89,7 +89,7 @@ public class BuilderFindTargetTask extends MaidCheckRateTask {
         } else if (MaidBuilderConfig.USE_SCAFFOLDING.get()) {
             session.scaffoldStep = index; // keeps the claim; BuilderScaffoldTask takes over
         } else {
-            job.recordAttempt(index, level.getGameTime());
+            job.recordAttempt(index, level.getGameTime(), BuildJob.Problem.UNREACHABLE);
             job.release(maid.getUUID());
             setNextCheckTickCount(IDLE_RECHECK_TICKS);
         }
@@ -125,7 +125,7 @@ public class BuilderFindTargetTask extends MaidCheckRateTask {
             if (job.isClearStep(i)) {
                 BlockPos primary = BlockBreaker.primaryPos(level, pos);
                 if (!BlockBreaker.breakable(level, primary, level.getBlockState(primary))) {
-                    job.setStatus(i, BuildJob.NEEDS_PLAYER); // a chest, bedrock...: no use walking there
+                    job.leaveForPlayer(i, BuildJob.Problem.UNBREAKABLE); // a chest, bedrock...: no use walking there
                     return false;
                 }
                 if (primary.equals(footing)) return false;

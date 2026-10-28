@@ -59,7 +59,7 @@ public class BuilderPlaceTask extends Behavior<EntityMaid> {
             job(level, maid).ifPresent(job -> {
                 int index = job.claimOf(maid.getUUID());
                 MaidBuilder.LOGGER.debug("Maid {} stopped walking out of reach of {} (maid at {})", maid.getUUID(), pos, maid.blockPosition());
-                if (index >= 0 && job.pos(index).equals(pos)) job.recordAttempt(index, level.getGameTime());
+                if (index >= 0 && job.pos(index).equals(pos)) job.recordAttempt(index, level.getGameTime(), BuildJob.Problem.UNREACHABLE);
                 job.release(maid.getUUID());
             });
             stopBreaking(level, maid, session);
@@ -135,9 +135,9 @@ public class BuilderPlaceTask extends Behavior<EntityMaid> {
                 // A lantern whose wall, a torch whose post is not built yet: wait for it rather than
                 // use up the attempts (e.g. the maid stood where the support goes).
                 if (supportPending(level, job, pos)) job.recordWait(index, level.getGameTime());
-                else job.recordAttempt(index, level.getGameTime());
+                else job.recordAttempt(index, level.getGameTime(), BuildJob.Problem.NO_SUPPORT);
             }
-            case OBSTRUCTED -> job.setStatus(index, BuildJob.NEEDS_PLAYER);
+            case OBSTRUCTED -> job.leaveForPlayer(index, BuildJob.Problem.OBSTRUCTED);
             case DENIED -> job.setStatus(index, BuildJob.FAILED);
         }
         return false;
@@ -174,12 +174,12 @@ public class BuilderPlaceTask extends Behavior<EntityMaid> {
         BlockState state = level.getBlockState(target);
         if (BlockBreaker.isCleared(state)) return !job.isClearStep(index);
         if (target.equals(maid.getOnPos()) || maid.getBoundingBox().intersects(new AABB(target))) {
-            job.recordAttempt(index, level.getGameTime()); // never dig away her own footing; try from elsewhere later
+            job.recordAttempt(index, level.getGameTime(), BuildJob.Problem.UNREACHABLE); // never dig away her own footing; try from elsewhere later
             return false;
         }
         if (!BlockBreaker.breakable(level, target, state)) {
             MaidBuilder.LOGGER.debug("Maid {} leaves {} at {} to the player", maid.getUUID(), state, target);
-            job.setStatus(index, BuildJob.NEEDS_PLAYER);
+            job.leaveForPlayer(index, BuildJob.Problem.UNBREAKABLE);
             return false;
         }
         if (!target.equals(session.breaking)) {
@@ -205,7 +205,7 @@ public class BuilderPlaceTask extends Behavior<EntityMaid> {
                 if (!job.isClearStep(index)) return true; // place the right block on the next call
                 if (job.isSatisfied(index, level.getBlockState(job.pos(index)))) job.setStatus(index, BuildJob.DONE);
             }
-            case PROTECTED -> job.setStatus(index, BuildJob.NEEDS_PLAYER);
+            case PROTECTED -> job.leaveForPlayer(index, BuildJob.Problem.PROTECTED);
             case DENIED -> job.setStatus(index, BuildJob.FAILED);
         }
         return false;

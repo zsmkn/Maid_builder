@@ -54,6 +54,8 @@ public final class TerritoryActions {
             case JOB_MATERIALS -> {
                 if (target != null && territory.jobQueue().contains(target)) MaterialReports.send(player, target, true);
             }
+            case JOB_PROBLEMS -> JobProblems.send(player, territory, target);
+            case JOB_RETRY, JOB_SKIP -> JobProblems.resolve(player, territory, target, msg.action() == TerritoryPayloads.Action.JOB_SKIP);
             case BIND_SOURCES -> toggleBinding(player, territory);
             case TOGGLE_BUILDER -> toggleBuilder(player, territory, target);
             case UPGRADE -> TerritoryUpgrades.upgrade(player, territory);

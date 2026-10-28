@@ -122,8 +122,24 @@ final class TerritorySelfTest {
                     new TerritoryPayloads.ShopMenu(UUID.randomUUID(), 2, "Reimu", rows, missing, 6, true)));
         }
         if (t == 114) shot(mc, "shop");
-        if (t == 115) mc.setScreen(null);
-        return t >= 118;
+        if (t == 115) {
+            // the details of blocks left for the player (in game the list comes from the server)
+            BlockPos at = mc.player.blockPosition();
+            var rows = java.util.List.of(
+                    new TerritoryPayloads.ProblemRow(at.offset(2, 0, 1), Blocks.OAK_PLANKS.defaultBlockState(), Blocks.CHEST.defaultBlockState(),
+                            com.maidbuilder.common.job.BuildJob.Problem.UNBREAKABLE),
+                    new TerritoryPayloads.ProblemRow(at.offset(4, 3, 2), Blocks.LANTERN.defaultBlockState(), Blocks.AIR.defaultBlockState(),
+                            com.maidbuilder.common.job.BuildJob.Problem.NO_SUPPORT),
+                    new TerritoryPayloads.ProblemRow(at.offset(-6, 7, 3), Blocks.OAK_STAIRS.defaultBlockState(), Blocks.AIR.defaultBlockState(),
+                            com.maidbuilder.common.job.BuildJob.Problem.UNREACHABLE),
+                    new TerritoryPayloads.ProblemRow(at.offset(1, 1, -5), Blocks.AIR.defaultBlockState(), Blocks.BEDROCK.defaultBlockState(),
+                            com.maidbuilder.common.job.BuildJob.Problem.UNBREAKABLE));
+            mc.setScreen(new com.maidbuilder.client.territory.JobProblemsScreen(null, new TerritoryPayloads.JobProblems(UUID.randomUUID(),
+                    UUID.randomUUID(), "", "maidbuilder:dormitory", mc.level.dimension().location(), 4, rows)));
+        }
+        if (t == 120) shot(mc, "problems");
+        if (t == 121) mc.setScreen(null);
+        return t >= 124;
     }
 
     private static void setUp(net.minecraft.server.MinecraftServer server, UUID playerId) {

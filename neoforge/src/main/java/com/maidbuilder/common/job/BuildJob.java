@@ -64,6 +64,27 @@ public final class BuildJob {
     public record Requirement(Item item, int count) {
     }
 
+    /** Why a step was left for the player. */
+    public enum Problem {
+        /** Saved before reasons were kept. */
+        UNKNOWN,
+        /** No spot to stand on or room for scaffolding within reach. */
+        UNREACHABLE,
+        /** The block cannot stand there (nothing to rest on). */
+        NO_SUPPORT,
+        /** Something that is not simply replaced fills the cell. */
+        OBSTRUCTED,
+        /** In the way, but not something a maid breaks (a chest, bedrock...). */
+        UNBREAKABLE,
+        /** A protection mod or spawn protection refused. */
+        PROTECTED;
+
+        /** Whether the step can go back to the maids once its cell is free. */
+        public boolean blocked() {
+            return this == OBSTRUCTED || this == UNBREAKABLE || this == PROTECTED;
+        }
+    }
+
     private final UUID id;
     private final UUID owner;
     private final String ownerName;
@@ -107,6 +128,8 @@ public final class BuildJob {
     private final Map<Integer, Integer> attempts = new HashMap<>();
     /** Times each step waited for its support (see {@link #recordWait}). */
     private final Map<Integer, Integer> waits = new HashMap<>();
+    /** Why each step left for the player was left (see {@link Problem}); the latest failure while still pending. */
+    private final Map<Integer, Problem> problems = new HashMap<>();
     /** Game time before which a step that just failed is not tried again. */
     private final Map<Integer, Long> retryAfter = new HashMap<>();
     /** Blocks each maid placed since the job was loaded (not saved). */
@@ -159,6 +182,14 @@ public final class BuildJob {
         if (buildingId != null) tag.putUUID("Building", buildingId);
         tag.putLongArray("MaterialSources", materialSources.stream().mapToLong(BlockPos::asLong).toArray());
         tag.putLongArray("Scaffolds", scaffolds.stream().mapToLong(BlockPos::asLong).toArray());
+        int[] problemPairs = new int[problems.size() * 2];
+        int n = 0;
+        for (Map.Entry<Integer, Problem> e : problems.entrySet()) {
+            if (status == null || status[e.getKey()] != NEEDS_PLAYER) continue;
+            problemPairs[n++] = e.getKey();
+            problemPairs[n++] = e.getValue().ordinal();
+        }
+        if (n > 0) tag.putIntArray("Problems", java.util.Arrays.copyOf(problemPairs, n));
         return tag;
     }
 
@@ -184,6 +215,11 @@ public final class BuildJob {
         if (tag.hasUUID("Territory")) job.territoryId = tag.getUUID("Territory");
         if (tag.contains("Template")) job.templateId = tag.getString("Template");
         if (tag.hasUUID("Building")) job.buildingId = tag.getUUID("Building");
+        int[] problemPairs = tag.getIntArray("Problems");
+        for (int i = 0; i + 1 < problemPairs.length; i += 2) {
+            Problem[] all = Problem.values();
+            job.problems.put(problemPairs[i], all[Math.floorMod(problemPairs[i + 1], all.length)]);
+        }
         return job;
     }
 
@@ -783,6 +819,7 @@ public final class BuildJob {
         if (status[index] != value) {
             MaidBuilder.LOGGER.debug("Job {} step {} {} at {}: {} -> {}", shortId(), index, targets[index], pos(index), status[index], value);
             status[index] = value;
+            if (value != NEEDS_PLAYER) problems.remove(index);
             attempts.remove(index);
             waits.remove(index);
             retryAfter.remove(index);
@@ -790,16 +827,29 @@ public final class BuildJob {
         }
     }
 
+    /** Leaves the step for the player, remembering why. */
+    public void leaveForPlayer(int index, Problem problem) {
+        problems.put(index, problem);
+        if (status[index] == NEEDS_PLAYER) dirtyListener.run();
+        else setStatus(index, NEEDS_PLAYER);
+    }
+
+    /** Why the step was left for the player. */
+    public Problem problem(int index) {
+        return problems.getOrDefault(index, Problem.UNKNOWN);
+    }
+
     /**
      * Records a failed try. The step then cools down (longer after each failure) so other steps get
      * built meanwhile; after the configured number of tries it is left for the player.
      */
-    public void recordAttempt(int index, long gameTime) {
+    public void recordAttempt(int index, long gameTime, Problem problem) {
         int n = attempts.merge(index, 1, Integer::sum);
         retryAfter.put(index, gameTime + RETRY_COOLDOWN_TICKS * n);
+        problems.put(index, problem);
         if (n >= MaidBuilderConfig.MAX_ATTEMPTS.get()) {
-            MaidBuilder.LOGGER.debug("Job {} step {} at {} left for the player after {} attempts", shortId(), index, pos(index), n);
-            setStatus(index, NEEDS_PLAYER);
+            MaidBuilder.LOGGER.debug("Job {} step {} at {} left for the player after {} attempts ({})", shortId(), index, pos(index), n, problem);
+            leaveForPlayer(index, problem);
         }
     }
 
@@ -810,7 +860,7 @@ public final class BuildJob {
      */
     public void recordWait(int index, long gameTime) {
         int n = waits.merge(index, 1, Integer::sum);
-        if (n % WAITS_PER_ATTEMPT == 0) recordAttempt(index, gameTime);
+        if (n % WAITS_PER_ATTEMPT == 0) recordAttempt(index, gameTime, Problem.NO_SUPPORT);
         else retryAfter.put(index, gameTime + RETRY_COOLDOWN_TICKS);
     }
 
@@ -826,8 +876,57 @@ public final class BuildJob {
         attempts.clear();
         waits.clear();
         retryAfter.clear();
+        problems.clear();
         cursor = 0;
         if (n > 0) dirtyListener.run();
         return n;
+    }
+
+    /** Gives up on every step left for the player (they count as failed), so the job can finish without them. */
+    public int skipNeedsPlayer() {
+        int n = 0;
+        for (int i = 0; i < status.length; i++) {
+            if (status[i] == NEEDS_PLAYER) {
+                status[i] = FAILED;
+                n++;
+            }
+        }
+        problems.clear();
+        if (n > 0) dirtyListener.run();
+        return n;
+    }
+
+    /**
+     * Looks again at the steps left for the player: done once the world holds the right block (the
+     * player built it, or emptied a cell to clear), back to the maids once what blocked the cell is
+     * gone. Needs the plan loaded; cells in unloaded chunks are skipped.
+     *
+     * @return how many steps changed
+     */
+    public int recheckNeedsPlayer(net.minecraft.server.level.ServerLevel level) {
+        if (plan == null || status == null) return 0;
+        int changed = 0;
+        for (int i = 0; i < status.length; i++) {
+            if (status[i] != NEEDS_PLAYER) continue;
+            BlockPos pos = pos(i);
+            if (!level.isLoaded(pos)) continue;
+            if (isSatisfied(i, level.getBlockState(pos))) {
+                setStatus(i, DONE);
+                changed++;
+            } else if (!isClearStep(i) && problem(i).blocked() && free(level, pos, targets[i])) {
+                setStatus(i, PENDING);
+                changed++;
+            }
+        }
+        if (changed > 0) cursor = 0;
+        return changed;
+    }
+
+    /** Whether every cell the block (and its other half) goes in can simply be replaced. */
+    private static boolean free(net.minecraft.server.level.ServerLevel level, BlockPos pos, BlockState target) {
+        for (BlockPlacer.Part part : BlockPlacer.partsOf(pos, target)) {
+            if (!level.getBlockState(part.pos()).canBeReplaced()) return false;
+        }
+        return true;
     }
 }

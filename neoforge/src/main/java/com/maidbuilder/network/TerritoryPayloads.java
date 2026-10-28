@@ -1,6 +1,7 @@
 package com.maidbuilder.network;
 
 import com.maidbuilder.MaidBuilder;
+import com.maidbuilder.common.job.BuildJob;
 import com.maidbuilder.common.territory.TemplateDef;
 import io.netty.buffer.ByteBuf;
 import net.minecraft.core.BlockPos;
@@ -12,8 +13,10 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.Item;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Mirror;
 import net.minecraft.world.level.block.Rotation;
+import net.minecraft.world.level.block.state.BlockState;
 
 import java.util.List;
 import java.util.Optional;
@@ -265,7 +268,7 @@ public final class TerritoryPayloads {
 
     public enum Action {
         UPGRADE, JOB_UP, JOB_DOWN, JOB_CANCEL, JOB_MATERIALS, REPAIR, REMOVE_BUILDING, BIND_SOURCES, TOGGLE_BUILDER, ASSIGN, UNASSIGN,
-        DEPOSIT, RESUME
+        DEPOSIT, RESUME, JOB_PROBLEMS, JOB_RETRY, JOB_SKIP
     }
 
     /** Client -> server: a button of the territory screen. {@code target} is a job, building or maid; {@code other} a building. */
@@ -456,6 +459,48 @@ public final class TerritoryPayloads {
 
         @Override
         public Type<ShopMenu> type() {
+            return TYPE;
+        }
+    }
+
+    // ---- blocks left for the player ----
+
+    private static final StreamCodec<ByteBuf, BlockState> BLOCK_STATE = ByteBufCodecs.idMapper(Block.BLOCK_STATE_REGISTRY);
+
+    /** A block the maids left: what goes there, what is there now and why ({@link BuildJob.Problem}). */
+    public record ProblemRow(BlockPos pos, BlockState target, BlockState current, BuildJob.Problem problem) {
+        public static final StreamCodec<ByteBuf, ProblemRow> CODEC = StreamCodec.composite(
+                BlockPos.STREAM_CODEC, ProblemRow::pos,
+                BLOCK_STATE, ProblemRow::target,
+                BLOCK_STATE, ProblemRow::current,
+                ByteBufCodecs.VAR_INT.map(i -> BuildJob.Problem.values()[Math.floorMod(i, BuildJob.Problem.values().length)],
+                        BuildJob.Problem::ordinal), ProblemRow::problem,
+                ProblemRow::new);
+    }
+
+    /**
+     * Server -> client: the blocks of a queued job left for the player, nearest first ({@code total}
+     * may be more than the rows sent).
+     */
+    public record JobProblems(UUID territory, UUID job, String name, String template, ResourceLocation dimension, int total,
+                              List<ProblemRow> rows) implements CustomPacketPayload {
+        public static final Type<JobProblems> TYPE = payloadType("job_problems");
+        public static final StreamCodec<ByteBuf, JobProblems> CODEC = StreamCodec.of(
+                (buf, m) -> {
+                    UUIDUtil.STREAM_CODEC.encode(buf, m.territory());
+                    UUIDUtil.STREAM_CODEC.encode(buf, m.job());
+                    ByteBufCodecs.STRING_UTF8.encode(buf, m.name());
+                    ByteBufCodecs.STRING_UTF8.encode(buf, m.template());
+                    ResourceLocation.STREAM_CODEC.encode(buf, m.dimension());
+                    ByteBufCodecs.VAR_INT.encode(buf, m.total());
+                    ProblemRow.CODEC.apply(ByteBufCodecs.list(1024)).encode(buf, m.rows());
+                },
+                buf -> new JobProblems(UUIDUtil.STREAM_CODEC.decode(buf), UUIDUtil.STREAM_CODEC.decode(buf), ByteBufCodecs.STRING_UTF8.decode(buf),
+                        ByteBufCodecs.STRING_UTF8.decode(buf), ResourceLocation.STREAM_CODEC.decode(buf), ByteBufCodecs.VAR_INT.decode(buf),
+                        ProblemRow.CODEC.apply(ByteBufCodecs.list(1024)).decode(buf)));
+
+        @Override
+        public Type<JobProblems> type() {
             return TYPE;
         }
     }

@@ -236,6 +236,96 @@ public final class TerritoryGameTests {
         helper.succeed();
     }
 
+    /**
+     * A repair whose last block the maids had to leave for the player stays queued (it used to be
+     * dropped as finished) with the reason kept, also across a save; the details list it; once the
+     * chest in the way is gone the block goes back to the maids, and once the right block stands
+     * there the repair completes. Skipping gives up on the blocks and lets the job finish.
+     */
+    @GameTest(template = FLOOR, batch = "territory_problems")
+    public static void blocksLeftForPlayerStayQueued(GameTestHelper helper) {
+        clearNear(helper);
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerPlayer owner = player(helper, "mb_problems_owner");
+        clearOwnedBy(server, owner.getUUID());
+        try {
+            if (!useFlag(helper, owner, new BlockPos(1, 1, 14))) helper.fail("flag was not placed");
+            Territory t = TerritoryManager.data(server).atFlag(helper.getLevel().dimension(), helper.absolutePos(new BlockPos(1, 2, 14)));
+            TemplateRegistry.Entry entry = testTemplate("problem_hut", 1, 9, "test_problem_hut", "production");
+            RegisteredBuilding b = instantBuilding(helper, owner, t, entry, new BlockPos(5, 2, 5));
+            BlockPos chestRel = new BlockPos(5, 2, 5);
+            helper.setBlock(chestRel, Blocks.CHEST);
+            helper.setBlock(new BlockPos(6, 2, 5), Blocks.AIR);
+            helper.setBlock(new BlockPos(7, 2, 5), Blocks.AIR);
+            BuildingIntegrity.checkNow(server, t, b);
+            if (b.isWorking()) helper.fail("damaged building still working: " + b.integrity());
+
+            if (!TerritoryUpgrades.repair(owner, t, b.id())) helper.fail("repair not queued");
+            BuildJob repair = BuildJobManager.loaded(server, t.jobQueue().getFirst()).orElseThrow();
+            BlockPos chest = helper.absolutePos(chestRel);
+            int chestStep = -1;
+            for (int i = 0; i < repair.size(); i++) {
+                if (repair.pos(i).equals(chest) && !repair.isClearStep(i)) chestStep = i;
+            }
+            if (chestStep < 0) helper.fail("no step at the chest");
+            // the maids build the rest and leave the chest's cell to the player
+            for (int i = 0; i < repair.size(); i++) {
+                if (i == chestStep) continue;
+                if (!BlockPlacer.matches(helper.getLevel().getBlockState(repair.pos(i)), repair.target(i))) {
+                    BlockPlacer.placeExact(helper.getLevel(), repair.pos(i), repair.target(i));
+                }
+                repair.setStatus(i, BuildJob.DONE);
+            }
+            repair.leaveForPlayer(chestStep, BuildJob.Problem.UNBREAKABLE);
+            if (!repair.isComplete()) helper.fail("only the player's block should be left");
+
+            TerritoryTicker.updateQueue(server, t);
+            if (!t.jobQueue().contains(repair.id())) helper.fail("a repair with a block left for the player was dropped from the queue");
+            if (BuildJob.load(repair.save()).problem(chestStep) != BuildJob.Problem.UNBREAKABLE) helper.fail("reason not saved");
+            TerritoryPayloads.JobProblems details = com.maidbuilder.common.territory.JobProblems.details(helper.getLevel(), t, repair, chest);
+            if (details.total() != 1 || details.rows().size() != 1) helper.fail("details list " + details.total() + " blocks");
+            TerritoryPayloads.ProblemRow row = details.rows().getFirst();
+            if (!row.pos().equals(chest) || row.problem() != BuildJob.Problem.UNBREAKABLE || !row.current().is(Blocks.CHEST)
+                    || !BlockPlacer.matches(row.target(), repair.target(chestStep))) {
+                helper.fail("wrong row " + row);
+            }
+
+            helper.setBlock(chestRel, Blocks.AIR); // the player takes the chest away
+            TerritoryTicker.updateQueue(server, t);
+            if (repair.status(chestStep) != BuildJob.PENDING) helper.fail("freed block not handed back to the maids: " + repair.status(chestStep));
+            repair.leaveForPlayer(chestStep, BuildJob.Problem.UNREACHABLE);
+            TerritoryTicker.updateQueue(server, t);
+            if (repair.status(chestStep) != BuildJob.NEEDS_PLAYER) helper.fail("an unreachable empty cell went back to the maids");
+            BlockPlacer.placeExact(helper.getLevel(), chest, repair.target(chestStep)); // the player builds it
+            TerritoryTicker.updateQueue(server, t);
+            if (t.jobQueue().contains(repair.id())) helper.fail("repair not completed after the player built the block");
+            if (!b.isWorking() || b.integrity() != 100) helper.fail("not working after the repair: " + b.integrity());
+
+            // retry and skip from the details screen
+            helper.setBlock(new BlockPos(6, 2, 5), Blocks.AIR);
+            helper.setBlock(new BlockPos(7, 2, 5), Blocks.AIR);
+            helper.setBlock(new BlockPos(5, 2, 6), Blocks.AIR);
+            BuildingIntegrity.checkNow(server, t, b);
+            if (!TerritoryUpgrades.repair(owner, t, b.id())) helper.fail("second repair not queued");
+            BuildJob second = BuildJobManager.loaded(server, t.jobQueue().getFirst()).orElseThrow();
+            for (int i = 0; i < second.size(); i++) {
+                if (second.status(i) == BuildJob.PENDING) second.leaveForPlayer(i, BuildJob.Problem.UNREACHABLE);
+            }
+            int left = second.count(BuildJob.NEEDS_PLAYER);
+            com.maidbuilder.common.territory.JobProblems.resolve(owner, t, second.id(), false);
+            if (second.count(BuildJob.PENDING) != left || second.count(BuildJob.NEEDS_PLAYER) != 0) helper.fail("retry did not hand the blocks back");
+            for (int i = 0; i < second.size(); i++) {
+                if (second.status(i) == BuildJob.PENDING) second.leaveForPlayer(i, BuildJob.Problem.UNREACHABLE);
+            }
+            com.maidbuilder.common.territory.JobProblems.resolve(owner, t, second.id(), true);
+            if (t.jobQueue().contains(second.id())) helper.fail("skipped job still queued");
+            if (t.buildings().size() != 1) helper.fail("a skipped repair registered a new building");
+        } finally {
+            clearOwnedBy(server, owner.getUUID());
+        }
+        helper.succeed();
+    }
+
     /** A maid in home mode inside the territory is a resident (and counts for prosperity) until home mode is off. */
     @GameTest(template = FLOOR, batch = "territory_residents", timeoutTicks = 800)
     public static void residentsComeAndGo(GameTestHelper helper) {

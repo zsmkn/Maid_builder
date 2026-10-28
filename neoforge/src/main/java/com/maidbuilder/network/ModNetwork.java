@@ -70,6 +70,8 @@ public final class ModNetwork {
         });
         registrar.playToClient(TerritoryPayloads.ShopMenu.TYPE, TerritoryPayloads.ShopMenu.CODEC,
                 (msg, ctx) -> com.maidbuilder.client.territory.ShopScreen.onMenu(msg));
+        registrar.playToClient(TerritoryPayloads.JobProblems.TYPE, TerritoryPayloads.JobProblems.CODEC,
+                (msg, ctx) -> com.maidbuilder.client.territory.JobProblemsScreen.open(msg));
         registrar.playToClient(TerritoryPayloads.TravelMenu.TYPE, TerritoryPayloads.TravelMenu.CODEC,
                 (msg, ctx) -> com.maidbuilder.client.territory.TravelScreen.open(msg));
         registrar.playToClient(TerritoryPayloads.TemplateStructure.TYPE, TerritoryPayloads.TemplateStructure.CODEC,

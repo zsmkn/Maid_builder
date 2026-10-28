@@ -132,7 +132,7 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
         }
         if (column == null) {
             MaidBuilder.LOGGER.debug("Maid {} found neither a way nor room for scaffolding to reach {}", maid.getUUID(), target);
-            job.recordAttempt(index, gameTime);
+            job.recordAttempt(index, gameTime, BuildJob.Problem.UNREACHABLE);
             return;
         }
         if (!job.claimColumn(column.key(), maid.getUUID())) {
@@ -460,7 +460,7 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
 
     private void failClaimed(EntityMaid maid, long gameTime) {
         int index = job.claimOf(maid.getUUID());
-        if (index >= 0) job.recordAttempt(index, gameTime);
+        if (index >= 0) job.recordAttempt(index, gameTime, BuildJob.Problem.UNREACHABLE);
         job.release(maid.getUUID());
     }
 

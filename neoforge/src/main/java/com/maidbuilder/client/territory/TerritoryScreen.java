@@ -408,6 +408,18 @@ public class TerritoryScreen extends Screen {
             if (job.suspended()) status.append(Component.translatable("screen.maidbuilder.territory.job_suspended").withStyle(ChatFormatting.RED));
             g.drawString(font, status, left + 2, top + 11, 0xAAAAAA, false);
             renderButtons(g, top, left, width, mouseX, mouseY, partialTick);
+            if (hovering && job.needsPlayer() > 0 && widgets.stream().noneMatch(w -> w.isMouseOver(mouseX, mouseY))) {
+                setTooltipForNextRenderPass(Component.translatable("screen.maidbuilder.territory.job_problems_tip"));
+            }
+        }
+
+        /** A click on the row itself (not a button) lists the blocks left for the player. */
+        @Override
+        public boolean mouseClicked(double mouseX, double mouseY, int button) {
+            if (super.mouseClicked(mouseX, mouseY, button)) return true;
+            if (job.needsPlayer() <= 0) return false;
+            send(TerritoryPayloads.Action.JOB_PROBLEMS, job.id(), null);
+            return true;
         }
     }
 
