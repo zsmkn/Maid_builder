@@ -44,6 +44,12 @@ public class TemplateGenerator {
         templates.put("large_ranch", ranch(2));
         templates.put("fishing_dock", fishingDock());
         templates.put("pavilion", pavilion());
+        templates.put("canteen", canteen());
+        templates.put("village_hall", villageHall());
+        templates.put("trading_post", tradingPost());
+        templates.put("watchtower", watchtower());
+        templates.put("shrine", shrine());
+        templates.put("builders_shop", buildersShop());
         for (Map.Entry<String, Grid> e : templates.entrySet()) {
             Schematic s = e.getValue().toSchematic(e.getKey());
             try (OutputStream os = Files.newOutputStream(out.resolve(e.getKey() + ".litematic"))) {
@@ -293,6 +299,205 @@ public class TemplateGenerator {
         g.set(3, 6, 3, "oak_planks");
         g.set(3, 7, 3, "oak_slab[type=bottom]");
         g.set(3, 3, 3, "lantern[hanging=true]");
+        return g;
+    }
+
+    /** 9x7 dining house: two tables with chairs, stoves and barrels along the back wall. */
+    static Grid canteen() {
+        Grid g = new Grid();
+        house(g, 1, 1, 9, 7, 3, true);
+        g.set(3, 1, 6, "smoker[facing=north,lit=false]");
+        g.set(4, 1, 6, "barrel[facing=north]");
+        g.set(6, 1, 6, "barrel[facing=north]");
+        g.set(7, 1, 6, "furnace[facing=north,lit=false]");
+        g.set(5, 1, 6, "crafting_table");
+        for (int x : new int[]{3, 7}) {
+            g.set(x, 1, 4, "oak_fence");
+            g.set(x, 2, 4, "oak_pressure_plate");
+            g.set(x - 1, 1, 4, "oak_stairs[facing=west,half=bottom]");
+            g.set(x + 1, 1, 4, "oak_stairs[facing=east,half=bottom]");
+        }
+        g.set(5, 2, 6, "wall_torch[facing=north]");
+        g.set(2, 2, 2, "wall_torch[facing=east]");
+        g.set(8, 2, 2, "wall_torch[facing=west]");
+        for (int x : new int[]{3, 7}) g.set(x, 2, 1, "glass_pane");
+        g.set(1, 2, 4, "glass_pane");
+        g.set(9, 2, 4, "glass_pane");
+        return g;
+    }
+
+    /** 11x9 hall with three beds and job site blocks: villagers move in here. */
+    static Grid villageHall() {
+        Grid g = new Grid();
+        house(g, 1, 1, 11, 9, 3, true);
+        for (int x : new int[]{3, 6, 9}) {
+            g.set(x, 1, 7, "white_bed[facing=south,part=foot,occupied=false]");
+            g.set(x, 1, 8, "white_bed[facing=south,part=head,occupied=false]");
+        }
+        g.set(2, 1, 4, "composter[level=0]");
+        g.set(10, 1, 4, "fletching_table");
+        g.set(10, 1, 5, "barrel[facing=west]");
+        g.set(2, 1, 5, "crafting_table");
+        g.set(6, 2, 8, "wall_torch[facing=north]");
+        g.set(2, 2, 2, "wall_torch[facing=east]");
+        g.set(10, 2, 2, "wall_torch[facing=west]");
+        for (int x : new int[]{3, 9}) g.set(x, 2, 1, "glass_pane");
+        for (int z : new int[]{4, 6}) {
+            g.set(1, 2, z, "glass_pane");
+            g.set(11, 2, z, "glass_pane");
+        }
+        return g;
+    }
+
+    /**
+     * Fenced 11x11 yard (traders stay inside, the gate keeps their llamas in) with a roofed
+     * counter at the back: the cartography table there is the travel desk.
+     */
+    static Grid tradingPost() {
+        Grid g = new Grid();
+        int s = 11;
+        for (int x = 0; x < s; x++) {
+            for (int z = 0; z < s; z++) {
+                boolean edge = x == 0 || z == 0 || x == s - 1 || z == s - 1;
+                g.set(x, 0, z, edge ? "cobblestone" : "dirt");
+            }
+        }
+        for (int z = 1; z <= 7; z++) g.set(5, 0, z, "cobblestone");
+        fenceRing(g, 0, 1, 0, s, s, 5);
+        for (int[] c : new int[][]{{0, 0}, {s - 1, 0}, {0, s - 1}, {s - 1, s - 1}}) g.set(c[0], 2, c[1], "torch");
+        // Counter: plank floor, back wall, two front posts, slab roof.
+        g.fill(1, 0, 8, s - 2, 0, s - 2, "oak_planks");
+        g.fill(1, 1, 9, s - 2, 2, 9, "oak_planks");
+        for (int x : new int[]{1, s - 2}) {
+            g.fill(x, 1, 8, x, 2, 8, "oak_log");
+            g.fill(x, 1, 9, x, 2, 9, "oak_log");
+        }
+        g.fill(0, 3, 7, s - 1, 3, s - 1, "oak_slab[type=bottom]");
+        g.set(5, 1, 8, "cartography_table");
+        g.set(3, 1, 8, "barrel[facing=up]");
+        g.set(7, 1, 8, "barrel[facing=up]");
+        g.set(5, 2, 8, "wall_torch[facing=north]");
+        // Hay for the llamas.
+        g.set(1, 1, 1, "hay_block");
+        g.set(2, 1, 1, "hay_block");
+        g.set(1, 1, 2, "hay_block");
+        return g;
+    }
+
+    /** 5x5 stone and timber tower: a ladder inside up to a railed lookout under a slab roof. */
+    static Grid watchtower() {
+        Grid g = new Grid();
+        int s = 5, oz = 1, deck = 9;
+        for (int x = 0; x < s; x++) {
+            for (int z = 0; z < s; z++) {
+                boolean edgeX = x == 0 || x == s - 1, edgeZ = z == 0 || z == s - 1;
+                g.set(x, 0, oz + z, edgeX || edgeZ ? "cobblestone" : "oak_planks");
+                if (!edgeX && !edgeZ) continue;
+                for (int y = 1; y < deck; y++) {
+                    String state = edgeX && edgeZ ? "oak_log" : y <= 2 ? "cobblestone" : "oak_planks";
+                    g.set(x, y, oz + z, state);
+                }
+            }
+        }
+        door(g, 2, oz, 2);
+        for (int y = 1; y <= deck; y++) g.set(2, y, oz + 3, "ladder[facing=north]");
+        // Windows on the sides.
+        for (int y : new int[]{4, 7}) {
+            g.set(0, y, oz + 2, "glass_pane");
+            g.set(s - 1, y, oz + 2, "glass_pane");
+            g.set(2, y, oz, "glass_pane");
+        }
+        // Lookout: plank deck (hole over the ladder), railing, corner posts, slab roof.
+        for (int x = 0; x < s; x++) {
+            for (int z = 0; z < s; z++) if (!(x == 2 && z == 3)) g.set(x, deck, oz + z, "oak_planks");
+        }
+        for (int x = 0; x < s; x++) {
+            for (int z = 0; z < s; z++) {
+                boolean corner = (x == 0 || x == s - 1) && (z == 0 || z == s - 1);
+                boolean edge = x == 0 || z == 0 || x == s - 1 || z == s - 1;
+                if (corner) g.fill(x, deck + 1, oz + z, x, deck + 2, oz + z, "oak_log");
+                else if (edge) g.set(x, deck + 1, oz + z, "oak_fence");
+            }
+        }
+        g.fill(0, deck + 3, oz, s - 1, deck + 3, oz + s - 1, "oak_slab[type=bottom]");
+        g.set(2, deck + 2, oz + 1, "lantern[hanging=true]");
+        return g;
+    }
+
+    /** A torii over a stone path through a flower garden, stone lanterns, and a small hall at the end. */
+    static Grid shrine() {
+        Grid g = new Grid();
+        int w = 9;
+        for (int z = 0; z <= 7; z++) {
+            for (int x = 0; x < w; x++) g.set(x, 0, z, x >= 3 && x <= 5 ? "stone_bricks" : "dirt");
+        }
+        // Torii.
+        for (int x : new int[]{1, 7}) g.fill(x, 1, 2, x, 4, 2, "red_wool");
+        g.fill(1, 4, 2, 7, 4, 2, "red_wool");
+        g.fill(0, 5, 2, 8, 5, 2, "red_wool");
+        g.fill(0, 6, 2, 8, 6, 2, "oak_slab[type=bottom]");
+        // Stone lanterns and flowers.
+        for (int x : new int[]{2, 6}) {
+            g.set(x, 1, 5, "cobblestone_wall");
+            g.set(x, 2, 5, "lantern[hanging=false]");
+        }
+        String[] flowers = {"poppy", "dandelion", "oxeye_daisy", "cornflower", "allium", "azure_bluet"};
+        int[][] spots = {{0, 0}, {8, 0}, {0, 4}, {8, 4}, {1, 6}, {7, 6}};
+        for (int i = 0; i < spots.length; i++) g.set(spots[i][0], 1, spots[i][1], flowers[i]);
+        // Hall.
+        house(g, 1, 8, 7, 7, 3, false);
+        g.set(4, 1, 13, "barrel[facing=up]");
+        g.set(3, 1, 13, "potted_poppy");
+        g.set(5, 1, 13, "potted_dandelion");
+        g.set(2, 2, 10, "wall_torch[facing=east]");
+        g.set(6, 2, 10, "wall_torch[facing=west]");
+        g.set(4, 2, 13, "wall_torch[facing=north]");
+        return g;
+    }
+
+    /**
+     * 9x8 shop open at the front: customers stand under the porch, the clerk behind a counter of
+     * barrels around the stonecutter (the shop desk), goods on show along the back wall.
+     */
+    static Grid buildersShop() {
+        Grid g = new Grid();
+        int w = 9, d = 8, top = 3;
+        for (int x = 0; x < w; x++) {
+            for (int z = 0; z < d; z++) {
+                boolean edge = x == 0 || x == w - 1 || z == 0 || z == d - 1;
+                g.set(x, 0, z, edge ? "cobblestone" : "oak_planks");
+            }
+        }
+        // Back and side walls (the front two rows are an open porch).
+        for (int y = 1; y <= top; y++) {
+            for (int x = 0; x < w; x++) g.set(x, y, d - 1, x == 0 || x == w - 1 ? "oak_log" : y == 1 ? "cobblestone" : "oak_planks");
+            for (int z = 2; z < d - 1; z++) {
+                for (int x : new int[]{0, w - 1}) g.set(x, y, z, z == 2 ? "oak_log" : y == 1 ? "cobblestone" : "oak_planks");
+            }
+            g.set(0, y, 0, "oak_log");
+            g.set(w - 1, y, 0, "oak_log");
+        }
+        g.fill(0, top + 1, 0, w - 1, top + 1, d - 1, "oak_planks");
+        g.fill(0, top + 2, 0, w - 1, top + 2, 0, "oak_slab[type=bottom]");
+        g.set(0, 2, 4, "glass_pane");
+        g.set(w - 1, 2, 4, "glass_pane");
+        // Counter with the stonecutter in the middle; ways round it at both ends.
+        for (int x : new int[]{2, 3, 5, 6}) g.set(x, 1, 3, "barrel[facing=up]");
+        g.set(4, 1, 3, "stonecutter[facing=south]");
+        // Goods on show.
+        g.set(1, 1, 6, "oak_log[axis=x]");
+        g.set(2, 1, 6, "oak_log[axis=x]");
+        g.set(1, 2, 6, "oak_log[axis=x]");
+        g.set(3, 1, 6, "cobblestone");
+        g.set(4, 1, 6, "cobblestone");
+        g.set(3, 2, 6, "cobblestone");
+        g.set(6, 1, 6, "glass");
+        g.set(7, 1, 6, "glass");
+        g.set(7, 2, 6, "glass");
+        g.set(5, 1, 6, "crafting_table");
+        g.set(4, top, 4, "lantern[hanging=true]");
+        g.set(1, 2, 0, "wall_torch[facing=east]");
+        g.set(w - 2, 2, 0, "wall_torch[facing=west]");
         return g;
     }
 

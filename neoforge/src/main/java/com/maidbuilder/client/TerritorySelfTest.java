@@ -18,6 +18,7 @@ import net.minecraft.client.gui.components.events.ContainerEventHandler;
 import net.minecraft.client.gui.components.events.GuiEventListener;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
+import com.maidbuilder.network.TerritoryPayloads;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.Mirror;
@@ -107,7 +108,22 @@ final class TerritorySelfTest {
                 if (player != null && id != null) player.level().setBlockAndUpdate(pos, Blocks.AIR.defaultBlockState());
             });
         }
-        return t >= 115;
+        if (t == 109) {
+            // the shop screen with a few goods (in game the list comes from the server)
+            java.util.function.Function<String, ResourceLocation> item = ResourceLocation::withDefaultNamespace;
+            var rows = java.util.List.of(
+                    new TerritoryPayloads.ShopRow(item.apply("oak_planks"), "wood", 2, 16, 112, 2),
+                    new TerritoryPayloads.ShopRow(item.apply("spruce_stairs"), "wood", 2, 16, 128, 2),
+                    new TerritoryPayloads.ShopRow(item.apply("dark_oak_log"), "wood", 2, 16, 0, 2),
+                    new TerritoryPayloads.ShopRow(item.apply("cherry_fence"), "wood", 2, 16, 128, 3),
+                    new TerritoryPayloads.ShopRow(item.apply("stone_bricks"), "stone", 2, 16, 128, 2));
+            var missing = java.util.List.of(new TerritoryPayloads.MissingRow(item.apply("oak_planks"), 40, 3, TerritoryPayloads.MissingStatus.OK));
+            mc.setScreen(new com.maidbuilder.client.territory.ShopScreen(
+                    new TerritoryPayloads.ShopMenu(UUID.randomUUID(), 2, "Reimu", rows, missing, 6, true)));
+        }
+        if (t == 114) shot(mc, "shop");
+        if (t == 115) mc.setScreen(null);
+        return t >= 118;
     }
 
     private static void setUp(net.minecraft.server.MinecraftServer server, UUID playerId) {

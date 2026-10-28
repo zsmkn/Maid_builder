@@ -24,7 +24,7 @@ import java.util.UUID;
  * need. Picking one starts placing it. The "custom" tab explains placing one's own blueprints.
  */
 public class TemplateCatalogScreen extends Screen {
-    private static final List<String> CATEGORY_ORDER = List.of("production", "storage", "housing", "decoration");
+    private static final List<String> CATEGORY_ORDER = List.of("production", "storage", "housing", "service", "decoration");
     private static final String CUSTOM = "custom";
 
     private final UUID territory;

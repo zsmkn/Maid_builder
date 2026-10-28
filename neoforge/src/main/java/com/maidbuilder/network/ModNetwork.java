@@ -62,6 +62,16 @@ public final class ModNetwork {
                 net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(player, new TerritoryPayloads.PlaceResult(ok));
             }
         });
+        registrar.playToServer(TerritoryPayloads.Travel.TYPE, TerritoryPayloads.Travel.CODEC, (msg, ctx) -> {
+            if (ctx.player() instanceof ServerPlayer player) com.maidbuilder.common.territory.TravelActions.travel(player, msg.from(), msg.to());
+        });
+        registrar.playToServer(TerritoryPayloads.ShopBuy.TYPE, TerritoryPayloads.ShopBuy.CODEC, (msg, ctx) -> {
+            if (ctx.player() instanceof ServerPlayer player) com.maidbuilder.common.territory.ShopActions.handle(player, msg);
+        });
+        registrar.playToClient(TerritoryPayloads.ShopMenu.TYPE, TerritoryPayloads.ShopMenu.CODEC,
+                (msg, ctx) -> com.maidbuilder.client.territory.ShopScreen.onMenu(msg));
+        registrar.playToClient(TerritoryPayloads.TravelMenu.TYPE, TerritoryPayloads.TravelMenu.CODEC,
+                (msg, ctx) -> com.maidbuilder.client.territory.TravelScreen.open(msg));
         registrar.playToClient(TerritoryPayloads.TemplateStructure.TYPE, TerritoryPayloads.TemplateStructure.CODEC,
                 (msg, ctx) -> com.maidbuilder.client.territory.BuildMode.onStructure(msg));
         registrar.playToClient(TerritoryPayloads.PlaceResult.TYPE, TerritoryPayloads.PlaceResult.CODEC,

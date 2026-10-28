@@ -131,9 +131,23 @@ public class BuilderPlaceTask extends Behavior<EntityMaid> {
                 job.setStatus(index, BuildJob.DONE);
                 job.recordPlaced(maid.getUUID());
             }
-            case CANNOT_SURVIVE -> job.recordAttempt(index, level.getGameTime());
+            case CANNOT_SURVIVE -> {
+                // A lantern whose wall, a torch whose post is not built yet: wait for it rather than
+                // use up the attempts (e.g. the maid stood where the support goes).
+                if (supportPending(level, job, pos)) job.recordWait(index, level.getGameTime());
+                else job.recordAttempt(index, level.getGameTime());
+            }
             case OBSTRUCTED -> job.setStatus(index, BuildJob.NEEDS_PLAYER);
             case DENIED -> job.setStatus(index, BuildJob.FAILED);
+        }
+        return false;
+    }
+
+    /** Whether a neighbouring cell is part of the structure but still empty: what the block rests on may come later. */
+    private static boolean supportPending(ServerLevel level, BuildJob job, BlockPos pos) {
+        for (net.minecraft.core.Direction d : net.minecraft.core.Direction.values()) {
+            BlockPos n = pos.relative(d);
+            if (job.isStructurePos(n) && level.getBlockState(n).canBeReplaced()) return true;
         }
         return false;
     }

@@ -295,7 +295,7 @@ public final class MaidBuilderGameTests {
 
     // ---- 6. phase 7: out of reach -> ask for scaffolding, build it, climb it, take it down ----
 
-    private static final String TALL_FLOOR = "floor16_tall";
+    static final String TALL_FLOOR = "floor16_tall";
     private static final int PILLAR_HEIGHT = 10;
     private static final BlockPos PILLAR = new BlockPos(8, 2, 8);
 
@@ -734,8 +734,48 @@ public final class MaidBuilderGameTests {
 
     @GameTest(template = TALL_FLOOR, timeoutTicks = 24000)
     public static void dormitoryOneMaid(GameTestHelper helper) {
-        Schematic schematic = com.maidbuilder.common.territory.TemplateRegistry.entry(MaidBuilder.id("dormitory")).schematic();
-        BuildJob job = createJob(helper, schematic, new BlockPos(2, 2, 3));
+        buildTemplateOneMaid(helper, "dormitory", new BlockPos(2, 2, 3));
+    }
+
+    // ---- the service building templates, each built by one maid from a chest ----
+
+    @GameTest(template = TALL_FLOOR, timeoutTicks = 24000)
+    public static void canteenOneMaid(GameTestHelper helper) {
+        buildTemplateOneMaid(helper, "canteen", new BlockPos(2, 2, 3));
+    }
+
+    @GameTest(template = TALL_FLOOR, timeoutTicks = 24000)
+    public static void villageHallOneMaid(GameTestHelper helper) {
+        buildTemplateOneMaid(helper, "village_hall", new BlockPos(1, 2, 3));
+    }
+
+    @GameTest(template = TALL_FLOOR, timeoutTicks = 24000)
+    public static void tradingPostOneMaid(GameTestHelper helper) {
+        buildTemplateOneMaid(helper, "trading_post", new BlockPos(2, 2, 3));
+    }
+
+    @GameTest(template = TALL_FLOOR, timeoutTicks = 24000)
+    public static void watchtowerOneMaid(GameTestHelper helper) {
+        buildTemplateOneMaid(helper, "watchtower", new BlockPos(6, 2, 6));
+    }
+
+    @GameTest(template = TALL_FLOOR, timeoutTicks = 24000)
+    public static void buildersShopOneMaid(GameTestHelper helper) {
+        buildTemplateOneMaid(helper, "builders_shop", new BlockPos(3, 2, 3));
+    }
+
+    @GameTest(template = TALL_FLOOR, timeoutTicks = 24000)
+    public static void shrineOneMaid(GameTestHelper helper) {
+        buildTemplateOneMaid(helper, "shrine", new BlockPos(4, 2, 0));
+    }
+
+    /**
+     * One maid builds a built-in template from a chest at the corner holding exactly its materials,
+     * with scaffolding of her own; logs the ticks and how often she climbed down.
+     */
+    private static void buildTemplateOneMaid(GameTestHelper helper, String template, BlockPos origin) {
+        Schematic schematic = com.maidbuilder.common.territory.TemplateRegistry.entry(MaidBuilder.id(template)).schematic();
+        BuildJob job = createJob(helper, schematic, origin);
         BlockPos chestRel = new BlockPos(0, 2, 0);
         helper.setBlock(chestRel, Blocks.CHEST);
         BlockPos chestAbs = helper.absolutePos(chestRel);
@@ -763,7 +803,7 @@ public final class MaidBuilderGameTests {
             if (!job.scaffolds().isEmpty()) helper.fail(job.scaffolds().size() + " scaffolding still up");
             if (count(maid.getAvailableInv(false), Items.SCAFFOLDING) != 64) helper.fail("maid holds " + count(maid.getAvailableInv(false), Items.SCAFFOLDING) + " scaffolding");
             if (maid.isShiftKeyDown()) helper.fail("maid is still sneaking");
-            MaidBuilder.LOGGER.info("BENCH dormitory with 1 maid: {} ticks, {} trips down", helper.getTick(), descents[0]);
+            MaidBuilder.LOGGER.info("BENCH {} with 1 maid: {} ticks, {} trips down", template, helper.getTick(), descents[0]);
             BuildJobManager.data(helper.getLevel().getServer()).remove(job.id());
         });
     }
@@ -1028,7 +1068,7 @@ public final class MaidBuilderGameTests {
         return createJob(helper, schematic, relativeOrigin, false);
     }
 
-    private static BuildJob createJob(GameTestHelper helper, Schematic schematic, BlockPos relativeOrigin, boolean placeFluids) {
+    static BuildJob createJob(GameTestHelper helper, Schematic schematic, BlockPos relativeOrigin, boolean placeFluids) {
         String hash = storeSchematic(helper, schematic);
         BuildJob job = new BuildJob(UUID.randomUUID(), UUID.randomUUID(), "gametest", schematic.metadata().name(), hash,
                 helper.getLevel().dimension(), helper.absolutePos(relativeOrigin), net.minecraft.world.level.block.Rotation.NONE,
@@ -1046,7 +1086,7 @@ public final class MaidBuilderGameTests {
         return spawnBuilderMaid(helper, job, new BlockPos(3, 2, 3));
     }
 
-    private static EntityMaid spawnBuilderMaid(GameTestHelper helper, BuildJob job, BlockPos spawn) {
+    static EntityMaid spawnBuilderMaid(GameTestHelper helper, BuildJob job, BlockPos spawn) {
         EntityMaid maid = helper.spawn(InitEntities.MAID.get(), spawn);
         maid.setSchedule(MaidSchedule.ALL);
         // Same as TLM's own game tests: home mode centred on the spawn point (otherwise the schedule

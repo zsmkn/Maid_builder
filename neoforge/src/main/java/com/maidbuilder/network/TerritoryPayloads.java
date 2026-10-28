@@ -364,4 +364,114 @@ public final class TerritoryPayloads {
             return TYPE;
         }
     }
+
+    // ---- travel between trading posts ----
+
+    /** A trading post the player can travel to: its building, the territory's flag and where it stands. */
+    public record TravelDestination(UUID building, ResourceLocation dimension, BlockPos flag, BlockPos pos) {
+        public static final StreamCodec<ByteBuf, TravelDestination> CODEC = StreamCodec.composite(
+                UUIDUtil.STREAM_CODEC, TravelDestination::building,
+                ResourceLocation.STREAM_CODEC, TravelDestination::dimension,
+                BlockPos.STREAM_CODEC, TravelDestination::flag,
+                BlockPos.STREAM_CODEC, TravelDestination::pos,
+                TravelDestination::new);
+    }
+
+    /** Server -> client: open the travel menu of a trading post; the cost is per trip (count 0: free). */
+    public record TravelMenu(UUID from, List<TravelDestination> destinations, ResourceLocation costItem, int costCount)
+            implements CustomPacketPayload {
+        public static final Type<TravelMenu> TYPE = payloadType("travel_menu");
+        public static final StreamCodec<ByteBuf, TravelMenu> CODEC = StreamCodec.composite(
+                UUIDUtil.STREAM_CODEC, TravelMenu::from,
+                TravelDestination.CODEC.apply(ByteBufCodecs.list(1024)), TravelMenu::destinations,
+                ResourceLocation.STREAM_CODEC, TravelMenu::costItem,
+                ByteBufCodecs.VAR_INT, TravelMenu::costCount,
+                TravelMenu::new);
+
+        @Override
+        public Type<TravelMenu> type() {
+            return TYPE;
+        }
+    }
+
+    /** Client -> server: travel from one trading post to another. */
+    public record Travel(UUID from, UUID to) implements CustomPacketPayload {
+        public static final Type<Travel> TYPE = payloadType("travel");
+        public static final StreamCodec<ByteBuf, Travel> CODEC = StreamCodec.composite(
+                UUIDUtil.STREAM_CODEC, Travel::from,
+                UUIDUtil.STREAM_CODEC, Travel::to,
+                Travel::new);
+
+        @Override
+        public Type<Travel> type() {
+            return TYPE;
+        }
+    }
+
+    // ---- building supplies shop ----
+
+    /** An item for sale: {@code count} of it per bundle for {@code price} emeralds; {@code left} still for sale today. */
+    public record ShopRow(ResourceLocation item, String category, int price, int count, int left, int requiredLevel) {
+        public static final StreamCodec<ByteBuf, ShopRow> CODEC = StreamCodec.composite(
+                ResourceLocation.STREAM_CODEC, ShopRow::item,
+                ByteBufCodecs.STRING_UTF8, ShopRow::category,
+                ByteBufCodecs.VAR_INT, ShopRow::price,
+                ByteBufCodecs.VAR_INT, ShopRow::count,
+                ByteBufCodecs.VAR_INT, ShopRow::left,
+                ByteBufCodecs.VAR_INT, ShopRow::requiredLevel,
+                ShopRow::new);
+    }
+
+    /** Why an item the territory's queue lacks cannot be ordered (in full). */
+    public enum MissingStatus { OK, NOT_SOLD, LOCKED, SOLD_OUT }
+
+    /** An item the territory's queued jobs still lack, and how many bundles ordering it would buy. */
+    public record MissingRow(ResourceLocation item, int needed, int bundles, MissingStatus status) {
+        public static final StreamCodec<ByteBuf, MissingRow> CODEC = StreamCodec.composite(
+                ResourceLocation.STREAM_CODEC, MissingRow::item,
+                ByteBufCodecs.VAR_INT, MissingRow::needed,
+                ByteBufCodecs.VAR_INT, MissingRow::bundles,
+                ByteBufCodecs.VAR_INT.map(i -> MissingStatus.values()[Math.floorMod(i, MissingStatus.values().length)], MissingStatus::ordinal),
+                MissingRow::status,
+                MissingRow::new);
+    }
+
+    /** Server -> client: the shop's goods and the territory's missing materials; {@code open} opens the screen, else it refreshes. */
+    public record ShopMenu(UUID building, int level, String clerk, List<ShopRow> rows, List<MissingRow> missing, int missingCost, boolean open)
+            implements CustomPacketPayload {
+        public static final Type<ShopMenu> TYPE = payloadType("shop_menu");
+        public static final StreamCodec<ByteBuf, ShopMenu> CODEC = StreamCodec.of(
+                (buf, m) -> {
+                    UUIDUtil.STREAM_CODEC.encode(buf, m.building());
+                    ByteBufCodecs.VAR_INT.encode(buf, m.level());
+                    ByteBufCodecs.STRING_UTF8.encode(buf, m.clerk());
+                    ShopRow.CODEC.apply(ByteBufCodecs.list(8192)).encode(buf, m.rows());
+                    MissingRow.CODEC.apply(ByteBufCodecs.list(8192)).encode(buf, m.missing());
+                    ByteBufCodecs.VAR_INT.encode(buf, m.missingCost());
+                    ByteBufCodecs.BOOL.encode(buf, m.open());
+                },
+                buf -> new ShopMenu(UUIDUtil.STREAM_CODEC.decode(buf), ByteBufCodecs.VAR_INT.decode(buf), ByteBufCodecs.STRING_UTF8.decode(buf),
+                        ShopRow.CODEC.apply(ByteBufCodecs.list(8192)).decode(buf), MissingRow.CODEC.apply(ByteBufCodecs.list(8192)).decode(buf),
+                        ByteBufCodecs.VAR_INT.decode(buf), ByteBufCodecs.BOOL.decode(buf)));
+
+        @Override
+        public Type<ShopMenu> type() {
+            return TYPE;
+        }
+    }
+
+    /** Client -> server: buy {@code bundles} bundles of an item; or, with no item, order everything the queue lacks. */
+    public record ShopBuy(UUID building, Optional<ResourceLocation> item, int bundles) implements CustomPacketPayload {
+        public static final Type<ShopBuy> TYPE = payloadType("shop_buy");
+        public static final StreamCodec<ByteBuf, ShopBuy> CODEC = StreamCodec.composite(
+                UUIDUtil.STREAM_CODEC, ShopBuy::building,
+                ByteBufCodecs.optional(ResourceLocation.STREAM_CODEC), ShopBuy::item,
+                ByteBufCodecs.VAR_INT, ShopBuy::bundles,
+                ShopBuy::new);
+
+        @Override
+        public Type<ShopBuy> type() {
+            return TYPE;
+        }
+    }
 }

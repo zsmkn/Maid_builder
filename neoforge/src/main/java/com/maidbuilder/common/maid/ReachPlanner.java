@@ -90,7 +90,19 @@ final class ReachPlanner {
     @Nullable
     private static Path pathTo(EntityMaid maid, BlockPos pos, int accuracy, BuildJob job, double margin) {
         Path path = maid.getNavigation().createPath(pos, accuracy);
-        return path != null && path.canReach() && staysInArea(path, job, margin) ? path : null;
+        return path != null && path.canReach() && staysInArea(path, job, margin) && !climbsScaffolding(path, job) ? path : null;
+    }
+
+    /**
+     * Whether the path climbs one of the job's scaffold columns (TLM's path finder treats scaffolding
+     * as a ladder). Columns belong to {@link BuilderScaffoldTask}, which would take her straight back
+     * down; walking through a column's foot is fine.
+     */
+    private static boolean climbsScaffolding(Path path, BuildJob job) {
+        for (int i = 0; i < path.getNodeCount(); i++) {
+            if (job.isScaffold(path.getNodePos(i).below())) return true;
+        }
+        return false;
     }
 
     // ---- 1. a walkable spot ----

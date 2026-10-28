@@ -28,6 +28,11 @@ public final class RegisteredBuilding {
     /** Intact enough to count; set by the integrity check. */
     private boolean working = true;
     private int integrity = 100;
+    /** Game time of the building's next periodic event (a trader or villager arriving); 0 = as soon as it works. */
+    private long nextEvent;
+    /** Shop: items sold on {@link #soldDay} (item id -> count); a new day starts from zero. */
+    private final java.util.Map<String, Integer> sold = new java.util.HashMap<>();
+    private long soldDay = -1;
     /** Maids working at this building (plan G4). */
     private final Set<UUID> assignedMaids = new LinkedHashSet<>();
 
@@ -55,6 +60,13 @@ public final class RegisteredBuilding {
         tag.putLong("Max", max.asLong());
         tag.putBoolean("Working", working);
         tag.putInt("Integrity", integrity);
+        if (nextEvent != 0) tag.putLong("NextEvent", nextEvent);
+        if (!sold.isEmpty()) {
+            CompoundTag soldTag = new CompoundTag();
+            sold.forEach(soldTag::putInt);
+            tag.put("Sold", soldTag);
+            tag.putLong("SoldDay", soldDay);
+        }
         ListTag maids = new ListTag();
         for (UUID m : assignedMaids) {
             CompoundTag t = new CompoundTag();
@@ -71,6 +83,12 @@ public final class RegisteredBuilding {
                 enumOr(Mirror.class, tag.getString("Mirror"), Mirror.NONE), BlockPos.of(tag.getLong("Min")), BlockPos.of(tag.getLong("Max")));
         b.working = !tag.contains("Working") || tag.getBoolean("Working");
         b.integrity = tag.contains("Integrity") ? tag.getInt("Integrity") : 100;
+        b.nextEvent = tag.getLong("NextEvent");
+        if (tag.contains("Sold")) {
+            CompoundTag soldTag = tag.getCompound("Sold");
+            for (String key : soldTag.getAllKeys()) b.sold.put(key, soldTag.getInt(key));
+            b.soldDay = tag.getLong("SoldDay");
+        }
         for (Tag t : tag.getList("Maids", Tag.TAG_COMPOUND)) b.assignedMaids.add(((CompoundTag) t).getUUID("Id"));
         return b;
     }
@@ -146,6 +164,27 @@ public final class RegisteredBuilding {
         this.integrity = percent;
         this.working = working;
         return changed;
+    }
+
+    public long nextEvent() {
+        return nextEvent;
+    }
+
+    public void setNextEvent(long gameTime) {
+        nextEvent = gameTime;
+    }
+
+    /** How many of the item the shop sold on {@code day}. */
+    public int soldOn(long day, String item) {
+        return day == soldDay ? sold.getOrDefault(item, 0) : 0;
+    }
+
+    void recordSale(long day, String item, int count) {
+        if (day != soldDay) {
+            sold.clear();
+            soldDay = day;
+        }
+        sold.merge(item, count, Integer::sum);
     }
 
     public Set<UUID> assignedMaids() {

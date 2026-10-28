@@ -59,6 +59,7 @@ public final class BuildJob {
     /** Denied by a protection mod or unresolvable. */
     public static final byte FAILED = 3;
     private static final long RETRY_COOLDOWN_TICKS = 100;
+    private static final int WAITS_PER_ATTEMPT = 5;
 
     public record Requirement(Item item, int count) {
     }
@@ -104,6 +105,8 @@ public final class BuildJob {
     private final Map<Integer, UUID> claims = new HashMap<>();
     private final Map<UUID, Integer> claimByMaid = new HashMap<>();
     private final Map<Integer, Integer> attempts = new HashMap<>();
+    /** Times each step waited for its support (see {@link #recordWait}). */
+    private final Map<Integer, Integer> waits = new HashMap<>();
     /** Game time before which a step that just failed is not tried again. */
     private final Map<Integer, Long> retryAfter = new HashMap<>();
     /** Blocks each maid placed since the job was loaded (not saved). */
@@ -288,6 +291,7 @@ public final class BuildJob {
             claims.clear();
             claimByMaid.clear();
             attempts.clear();
+            waits.clear();
             retryAfter.clear();
             ensureLoaded(server);
             for (int i = 0; i < status.length; i++) {
@@ -780,6 +784,7 @@ public final class BuildJob {
             MaidBuilder.LOGGER.debug("Job {} step {} {} at {}: {} -> {}", shortId(), index, targets[index], pos(index), status[index], value);
             status[index] = value;
             attempts.remove(index);
+            waits.remove(index);
             retryAfter.remove(index);
             dirtyListener.run();
         }
@@ -798,6 +803,17 @@ public final class BuildJob {
         }
     }
 
+    /**
+     * Records that a step could not stand because what it rests on is not built yet: it cools down
+     * like a failed try, but only every {@link #WAITS_PER_ATTEMPT}th wait counts as one, so a support
+     * that never comes still leaves it for the player in the end.
+     */
+    public void recordWait(int index, long gameTime) {
+        int n = waits.merge(index, 1, Integer::sum);
+        if (n % WAITS_PER_ATTEMPT == 0) recordAttempt(index, gameTime);
+        else retryAfter.put(index, gameTime + RETRY_COOLDOWN_TICKS);
+    }
+
     /** Puts every step left for the player back into the queue. */
     public int retryNeedsPlayer() {
         int n = 0;
@@ -808,6 +824,7 @@ public final class BuildJob {
             }
         }
         attempts.clear();
+        waits.clear();
         retryAfter.clear();
         cursor = 0;
         if (n > 0) dirtyListener.run();

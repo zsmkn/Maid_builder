@@ -33,6 +33,20 @@ public final class MaidBuilderConfig {
     public static final ModConfigSpec.DoubleValue CROP_GROWTH_CHANCE;
     public static final ModConfigSpec.BooleanValue BONUS_ANIMAL_BREEDING;
     public static final ModConfigSpec.DoubleValue BREEDING_COOLDOWN_FACTOR;
+    public static final ModConfigSpec.BooleanValue TRADING_POST_TRADERS;
+    public static final ModConfigSpec.IntValue TRADING_POST_INTERVAL;
+    public static final ModConfigSpec.IntValue TRADING_POST_STAY;
+    public static final ModConfigSpec.BooleanValue TRAVEL;
+    public static final ModConfigSpec.ConfigValue<String> TRAVEL_COST_ITEM;
+    public static final ModConfigSpec.IntValue TRAVEL_COST_COUNT;
+    public static final ModConfigSpec.BooleanValue VILLAGE_HALL_VILLAGERS;
+    public static final ModConfigSpec.IntValue VILLAGE_HALL_INTERVAL;
+    public static final ModConfigSpec.IntValue VILLAGE_HALL_CAP;
+    public static final ModConfigSpec.BooleanValue WATCHTOWER;
+    public static final ModConfigSpec.IntValue WATCHTOWER_RADIUS;
+    public static final ModConfigSpec.BooleanValue SHRINE_FAVORABILITY;
+    public static final ModConfigSpec.BooleanValue CANTEEN_REGEN;
+    public static final ModConfigSpec.BooleanValue SHOP;
 
     static {
         ModConfigSpec.Builder b = new ModConfigSpec.Builder();
@@ -109,6 +123,38 @@ public final class MaidBuilderConfig {
                 .define("animalBreeding", true);
         BREEDING_COOLDOWN_FACTOR = b.comment("The parents' breeding cooldown is multiplied by this (vanilla: 5 minutes).")
                 .defineInRange("breedingCooldownFactor", 0.5, 0.0, 1.0);
+        b.pop();
+        b.comment("What the service buildings (trading post, village hall, watchtower, shrine, canteen) do while they are intact.").push("services");
+        TRADING_POST_TRADERS = b.comment("A wandering trader (with two llamas) comes to each working trading post.")
+                .define("tradingPostTraders", true);
+        TRADING_POST_INTERVAL = b.comment("Ticks between two traders at a trading post (36000 = 30 minutes).")
+                .defineInRange("tradingPostInterval", 36000, 1200, 1728000);
+        TRADING_POST_STAY = b.comment("How long (ticks) a trader stays before leaving (vanilla traders: 48000).")
+                .defineInRange("tradingPostStay", 24000, 1200, 1728000);
+        TRAVEL = b.comment("Using the cartography table of a working trading post takes the owner to another of their trading posts.",
+                        "Sneak to use the table as usual.")
+                .define("travel", true);
+        TRAVEL_COST_ITEM = b.comment("Item paid for each trip (from the player's inventory; free in creative mode).")
+                .define("travelCostItem", "minecraft:emerald");
+        TRAVEL_COST_COUNT = b.comment("How many of that item a trip costs (0: free).")
+                .defineInRange("travelCostCount", 1, 0, 64);
+        VILLAGE_HALL_VILLAGERS = b.comment("A villager moves into each working village hall now and then, up to a limit.")
+                .define("villageHallVillagers", true);
+        VILLAGE_HALL_INTERVAL = b.comment("Ticks between two villagers moving in (24000 = 20 minutes).")
+                .defineInRange("villageHallInterval", 24000, 1200, 1728000);
+        VILLAGE_HALL_CAP = b.comment("No villager moves in while this many villagers live around the hall (within 16 blocks).")
+                .defineInRange("villageHallCap", 3, 1, 64);
+        WATCHTOWER = b.comment("Working watchtowers make hostile mobs nearby glow and tell the owner when a raid starts nearby.")
+                .define("watchtower", true);
+        WATCHTOWER_RADIUS = b.comment("How far (blocks, horizontally) a watchtower sees.")
+                .defineInRange("watchtowerRadius", 48, 8, 128);
+        SHRINE_FAVORABILITY = b.comment("The owner's maids in a territory with a working shrine gain favorability once a day (TLM's +2, like sleeping).")
+                .define("shrineFavorability", true);
+        CANTEEN_REGEN = b.comment("The owner's maids in a territory with a working canteen heal (as the maid_regen bonus; twice as fast with both).")
+                .define("canteenRegen", true);
+        SHOP = b.comment("Working building supplies shops sell building blocks for emeralds while their clerk (a maid working there) is in.",
+                        "Goods, prices and daily limits come from data packs (maidbuilder/shop/*.json).")
+                .define("shop", true);
         b.pop();
         b.pop();
         SPEC = b.build();

@@ -1,0 +1,9 @@
+{
+  "structure": "maidbuilder:watchtower",
+  "category": "service",
+  "required_level": 3,
+  "prosperity": 15,
+  "bonus": "watchtower",
+  "icon": "minecraft:spyglass",
+  "order": 3
+}

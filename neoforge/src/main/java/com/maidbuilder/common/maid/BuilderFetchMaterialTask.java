@@ -29,7 +29,6 @@ import net.neoforged.neoforge.items.IItemHandler;
 import javax.annotation.Nullable;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -56,8 +55,6 @@ public class BuilderFetchMaterialTask extends Behavior<EntityMaid> {
     private static final int WIDE_LOOKAHEAD_STEPS = 4096;
     private static final int MAX_RUN_TICKS = 1200;
     private static final double TAKE_DISTANCE = 2.5;
-    /** Steps of a planned way round handed to the game's path finder at a time (well inside its range). */
-    private static final int ROUTE_STEP = 20;
     private static final double TEAMMATE_RANGE = 32;
     /** Smallest amount worth walking to a teammate for. */
     private static final int MIN_SHARE = 4;
@@ -71,11 +68,8 @@ public class BuilderFetchMaterialTask extends Behavior<EntityMaid> {
     private EntityMaid teammate;
     @Nullable
     private Map<Item, Integer> wanted;
-    /** The way round to the container when the game's path finder found none (see {@link ReachPlanner#planWalk}). */
-    @Nullable
-    private List<BlockPos> route;
-    private int routeIndex;
-    private boolean routePlanned;
+    /** The way round to the container when the game's path finder found none. */
+    private final RouteFollower route = new RouteFollower();
 
     public BuilderFetchMaterialTask(BuilderSession session, float speed) {
         super(ImmutableMap.of(
@@ -194,8 +188,7 @@ public class BuilderFetchMaterialTask extends Behavior<EntityMaid> {
 
     @Override
     protected void start(ServerLevel level, EntityMaid maid, long gameTime) {
-        route = null;
-        routePlanned = false;
+        route.reset();
         maid.getBrain().eraseMemory(MemoryModuleType.CANT_REACH_WALK_TARGET_SINCE);
         if (container != null) BehaviorUtils.setWalkAndLookTargetMemories(maid, container, speed, 1);
         else if (teammate != null) BehaviorUtils.setWalkAndLookTargetMemories(maid, teammate, speed, 1);
@@ -214,10 +207,10 @@ public class BuilderFetchMaterialTask extends Behavior<EntityMaid> {
             take(level, maid);
             container = null;
             teammate = null;
-        } else if (container != null && !routePlanned && stopsShort(maid, target)) {
+        } else if (container != null && !route.planned() && stopsShort(maid, target)) {
             // The game's path finder only got part of the way (e.g. the way out of a building is
             // longer than it looks): plan the way round before she walks into the wall's dead end.
-            planRoute(level, maid);
+            route.plan(level, maid, container, TAKE_DISTANCE - 0.5, speed);
         } else if (maid.getBrain().getMemory(MemoryModuleType.WALK_TARGET).isEmpty()) {
             if (teammate != null && maid.distanceToSqr(teammate) <= TEAMMATE_RANGE * TEAMMATE_RANGE) {
                 // she keeps moving: follow her
@@ -226,15 +219,12 @@ public class BuilderFetchMaterialTask extends Behavior<EntityMaid> {
             }
             if (container != null && !maid.onGround() && !maid.isInWater()) {
                 // no path is found mid-jump or mid-fall: walk on once she has landed instead of giving up
-                maid.getBrain().setMemory(MemoryModuleType.WALK_TARGET,
-                        route != null ? new WalkTarget(route.get(routeIndex), speed, 0) : new WalkTarget(container, speed, 1));
+                WalkTarget waypoint = route.current(speed);
+                maid.getBrain().setMemory(MemoryModuleType.WALK_TARGET, waypoint != null ? waypoint : new WalkTarget(container, speed, 1));
                 return;
             }
-            if (route != null && routeIndex < route.size() - 1 && maid.blockPosition().distManhattan(route.get(routeIndex)) <= 2) {
-                nextWaypoint(maid);
-                return;
-            }
-            if (container != null && !routePlanned && planRoute(level, maid)) return;
+            if (route.advance(maid, speed)) return;
+            if (container != null && !route.planned() && route.plan(level, maid, container, TAKE_DISTANCE - 0.5, speed)) return;
             MaidBuilder.LOGGER.debug("Maid {} could not reach {}", maid.getUUID(), container != null ? container : teammate);
             cooldown = NOTHING_FOUND_INTERVAL;
             container = null;
@@ -252,24 +242,6 @@ public class BuilderFetchMaterialTask extends Behavior<EntityMaid> {
         Path path = maid.getNavigation().getPath();
         return path != null && path.getEndNode() != null
                 && Vec3.atBottomCenterOf(path.getEndNode().asBlockPos()).distanceToSqr(target) > TAKE_DISTANCE * TAKE_DISTANCE;
-    }
-
-    /** Plans the way round to the container (once per trip) and starts her along it; false if there is none. */
-    private boolean planRoute(ServerLevel level, EntityMaid maid) {
-        routePlanned = true;
-        route = ReachPlanner.planWalk(level, maid, container, TAKE_DISTANCE - 0.5);
-        if (route == null || route.isEmpty()) {
-            route = null;
-            return false;
-        }
-        routeIndex = -1;
-        nextWaypoint(maid);
-        return true;
-    }
-
-    private void nextWaypoint(EntityMaid maid) {
-        routeIndex = Math.min(route.size() - 1, routeIndex + ROUTE_STEP);
-        maid.getBrain().setMemory(MemoryModuleType.WALK_TARGET, new WalkTarget(route.get(routeIndex), speed, 0));
     }
 
     private void take(ServerLevel level, EntityMaid maid) {
@@ -293,7 +265,7 @@ public class BuilderFetchMaterialTask extends Behavior<EntityMaid> {
         container = null;
         teammate = null;
         wanted = null;
-        route = null;
+        route.reset();
         maid.getBrain().eraseMemory(MemoryModuleType.WALK_TARGET);
     }
 }

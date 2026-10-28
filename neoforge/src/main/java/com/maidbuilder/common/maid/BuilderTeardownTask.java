@@ -39,7 +39,9 @@ import java.util.Set;
  */
 public class BuilderTeardownTask extends Behavior<EntityMaid> {
     private static final int CHECK_INTERVAL = 40;
-    private static final int MAX_RUN_TICKS = 20 * 30;
+    private static final int MAX_RUN_TICKS = 20 * 60;
+    /** Close enough to a column's foot (a spot on the planned way round) to take it down. */
+    private static final double FOOT_DISTANCE = 2.5;
     private static final int MAX_FAILURES = 3;
 
     private final BuilderSession session;
@@ -51,6 +53,8 @@ public class BuilderTeardownTask extends Behavior<EntityMaid> {
     @Nullable
     private List<BlockPos> column;
     private int ticks;
+    /** The way round to the column's foot when the game's path finder found none. */
+    private final RouteFollower route = new RouteFollower();
 
     public BuilderTeardownTask(BuilderSession session, float speed) {
         super(ImmutableMap.of(MemoryModuleType.WALK_TARGET, MemoryStatus.VALUE_ABSENT), MAX_RUN_TICKS);
@@ -92,6 +96,7 @@ public class BuilderTeardownTask extends Behavior<EntityMaid> {
     protected void start(ServerLevel level, EntityMaid maid, long gameTime) {
         session.busy = true;
         ticks = 0;
+        route.reset();
         if (column != null && !nearFoot(maid)) {
             maid.getBrain().setMemory(MemoryModuleType.WALK_TARGET, new WalkTarget(column.getFirst(), speed, 1));
         }
@@ -110,6 +115,15 @@ public class BuilderTeardownTask extends Behavior<EntityMaid> {
             takeDown(level, maid, job, column);
             column = null;
         } else if (ticks > 5 && maid.getBrain().getMemory(MemoryModuleType.WALK_TARGET).isEmpty()) {
+            if (!maid.onGround() && !maid.isInWater()) {
+                // no path is found mid-jump or mid-fall: walk on once she has landed
+                WalkTarget waypoint = route.current(speed);
+                maid.getBrain().setMemory(MemoryModuleType.WALK_TARGET, waypoint != null ? waypoint : new WalkTarget(column.getFirst(), speed, 1));
+                return;
+            }
+            if (route.advance(maid, speed)) return;
+            // e.g. a column inside a building finished meanwhile: the way in may be longer than the path finder looks
+            if (!route.planned() && route.plan(level, maid, column.getFirst(), FOOT_DISTANCE, speed)) return;
             long key = BuildJob.columnKey(column.getFirst());
             int n = failures.merge(key, 1, Integer::sum);
             MaidBuilder.LOGGER.debug("Maid {} could not reach scaffolding at {} ({} tries)", maid.getUUID(), column.getFirst(), n);

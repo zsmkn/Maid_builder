@@ -36,6 +36,7 @@ public final class MaidBuilder {
         NeoForge.EVENT_BUS.addListener((AddReloadListenerEvent e) -> {
             e.addListener(new TerritoryLevels());
             e.addListener(new TemplateRegistry());
+            e.addListener(new com.maidbuilder.common.territory.ShopCatalog());
         });
     }
 
