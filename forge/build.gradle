@@ -80,7 +80,8 @@ legacyForge {
             systemProperty 'forge.enabledGameTestNamespaces', project.mod_id
         }
         configureEach {
-            gameDirectory = project.file(name == 'clientShaderTest' ? 'runs/shaders' : name == 'clientNetTest' ? 'runs/nettest' : 'run')
+            gameDirectory = project.file(name == 'clientShaderTest' ? 'runs/shaders' : name == 'clientNetTest' ? 'runs/nettest'
+                    : name == 'gameTestServer' ? 'runs/gametest' : 'run')
             systemProperty 'forge.logging.markers', 'REGISTRIES'
             logLevel = org.slf4j.event.Level.DEBUG
         }
@@ -91,6 +92,31 @@ legacyForge {
             sourceSet(sourceSets.main)
             // core classes are shipped inside the mod jar, so they belong to the same mod at dev time
             sourceSet(project(':core').sourceSets.main)
+        }
+    }
+}
+
+// Game tests run in their own folder (runs/gametest) on a copy of the world runServer made in run/
+// (run/networld: flat, peaceful; the game tests were tuned on it, a world the game test server makes
+// itself gets its chunks lit too late for some tests). Before each run the state earlier runs left
+// behind is removed: the jobs and territories of failed tests and the maids still bound to them stood
+// at the very spot the next run puts the same test.
+def gameTestWorld = project.file('runs/gametest/world')
+def devWorld = project.file('run/networld')
+tasks.matching { it.name == 'runGameTestServer' }.configureEach {
+    doFirst {
+        if (!new File(gameTestWorld, 'level.dat').exists() && new File(devWorld, 'level.dat').exists()) {
+            def from = devWorld.toPath(), to = gameTestWorld.toPath()
+            java.nio.file.Files.walk(from).each { p ->
+                def target = to.resolve(from.relativize(p).toString())
+                if (java.nio.file.Files.isDirectory(p)) java.nio.file.Files.createDirectories(target)
+                else if (p.fileName.toString() != 'session.lock') java.nio.file.Files.copy(p, target)
+            }
+        }
+        new File(gameTestWorld, 'entities').deleteDir()
+        new File(gameTestWorld, 'data/maid_backups').deleteDir()
+        ['maidbuilder_jobs.dat', 'maidbuilder_territories.dat', 'touhou_little_maid_world_data.dat', 'chunks.dat'].each {
+            new File(gameTestWorld, "data/${it}").delete()
         }
     }
 }

@@ -36,7 +36,13 @@ final class ConfigSections {
                                 MaidBuilderConfig.BONUS_NO_HOSTILE_SPAWNS, MaidBuilderConfig.BONUS_NO_SPAWNER_MOBS,
                                 MaidBuilderConfig.BONUS_MAID_REGEN, MaidBuilderConfig.MAID_REGEN_INTERVAL,
                                 MaidBuilderConfig.BONUS_CROP_GROWTH, MaidBuilderConfig.CROP_GROWTH_CHANCE,
-                                MaidBuilderConfig.BONUS_ANIMAL_BREEDING, MaidBuilderConfig.BREEDING_COOLDOWN_FACTOR)));
+                                MaidBuilderConfig.BONUS_ANIMAL_BREEDING, MaidBuilderConfig.BREEDING_COOLDOWN_FACTOR),
+                        section(MaidBuilderConfig.SPEC, "maidbuilder.configuration.services",
+                                MaidBuilderConfig.TRADING_POST_TRADERS, MaidBuilderConfig.TRADING_POST_INTERVAL, MaidBuilderConfig.TRADING_POST_STAY,
+                                MaidBuilderConfig.TRAVEL, MaidBuilderConfig.TRAVEL_COST_ITEM, MaidBuilderConfig.TRAVEL_COST_COUNT,
+                                MaidBuilderConfig.VILLAGE_HALL_VILLAGERS, MaidBuilderConfig.VILLAGE_HALL_INTERVAL, MaidBuilderConfig.VILLAGE_HALL_CAP,
+                                MaidBuilderConfig.WATCHTOWER, MaidBuilderConfig.WATCHTOWER_RADIUS,
+                                MaidBuilderConfig.SHRINE_FAVORABILITY, MaidBuilderConfig.CANTEEN_REGEN, MaidBuilderConfig.SHOP)));
     }
 
     private static ConfigEntry.Section withSubsections(ConfigEntry.Section section, ConfigEntry.Section... subsections) {

@@ -1,0 +1,9 @@
+{
+  "structure": "maidbuilder:shrine",
+  "category": "service",
+  "required_level": 4,
+  "prosperity": 40,
+  "bonus": "shrine",
+  "icon": "touhou_little_maid:hakurei_gohei",
+  "order": 4
+}

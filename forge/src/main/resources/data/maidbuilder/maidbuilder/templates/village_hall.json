@@ -1,0 +1,9 @@
+{
+  "structure": "maidbuilder:village_hall",
+  "category": "service",
+  "required_level": 2,
+  "prosperity": 20,
+  "bonus": "village_hall",
+  "icon": "minecraft:bell",
+  "order": 1
+}

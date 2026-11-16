@@ -39,13 +39,23 @@ public final class TerritoryTicker {
         }
     }
 
-    /** Drops deleted jobs from the queue and completes finished ones whose scaffolding is down. */
+    /**
+     * Drops deleted jobs from the queue and completes finished ones whose scaffolding is down. A job
+     * with blocks left for the player stays queued until the player builds them (or skips them).
+     */
     public static void updateQueue(MinecraftServer server, Territory territory) {
         for (UUID id : List.copyOf(territory.jobQueue())) {
             BuildJob job = BuildJobManager.data(server).get(id);
             if (job == null) {
                 territory.dequeue(id);
-            } else if (job.isComplete() && !job.isCancelled() && job.scaffolds().isEmpty()) {
+                continue;
+            }
+            int leftForPlayer = job.count(BuildJob.NEEDS_PLAYER);
+            if (leftForPlayer > 0 && job.isLoaded()) {
+                var level = server.getLevel(job.dimension());
+                if (level != null && job.recheckNeedsPlayer(level) > 0) leftForPlayer = job.count(BuildJob.NEEDS_PLAYER);
+            }
+            if (leftForPlayer == 0 && job.isComplete() && !job.isCancelled() && job.scaffolds().isEmpty()) {
                 completeJob(server, territory, job);
             }
         }

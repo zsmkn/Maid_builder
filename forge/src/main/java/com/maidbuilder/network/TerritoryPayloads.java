@@ -1,5 +1,6 @@
 package com.maidbuilder.network;
 
+import com.maidbuilder.common.job.BuildJob;
 import com.maidbuilder.common.territory.TemplateDef;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -7,8 +8,10 @@ import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Mirror;
 import net.minecraft.world.level.block.Rotation;
+import net.minecraft.world.level.block.state.BlockState;
 
 import java.util.List;
 import java.util.Optional;
@@ -281,7 +284,7 @@ public final class TerritoryPayloads {
 
     public enum Action {
         UPGRADE, JOB_UP, JOB_DOWN, JOB_CANCEL, JOB_MATERIALS, REPAIR, REMOVE_BUILDING, BIND_SOURCES, TOGGLE_BUILDER, ASSIGN, UNASSIGN,
-        DEPOSIT, RESUME
+        DEPOSIT, RESUME, JOB_PROBLEMS, JOB_RETRY, JOB_SKIP
     }
 
     /** Client -> server: a button of the territory screen. {@code target} is a job, building or maid; {@code other} a building. */
@@ -375,6 +378,165 @@ public final class TerritoryPayloads {
 
         public static PlaceResult decode(FriendlyByteBuf buf) {
             return new PlaceResult(buf.readBoolean());
+        }
+    }
+
+    // ---- travel between trading posts ----
+
+    /** A trading post the player can travel to: its building, the territory's flag and where it stands. */
+    public record TravelDestination(UUID building, ResourceLocation dimension, BlockPos flag, BlockPos pos) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeUUID(building);
+            buf.writeResourceLocation(dimension);
+            buf.writeBlockPos(flag);
+            buf.writeBlockPos(pos);
+        }
+
+        public static TravelDestination decode(FriendlyByteBuf buf) {
+            return new TravelDestination(buf.readUUID(), buf.readResourceLocation(), buf.readBlockPos(), buf.readBlockPos());
+        }
+    }
+
+    /** Server -> client: open the travel menu of a trading post; the cost is per trip (count 0: free). */
+    public record TravelMenu(UUID from, List<TravelDestination> destinations, ResourceLocation costItem, int costCount) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeUUID(from);
+            writeList(buf, destinations, (b, d) -> d.encode(b));
+            buf.writeResourceLocation(costItem);
+            buf.writeVarInt(costCount);
+        }
+
+        public static TravelMenu decode(FriendlyByteBuf buf) {
+            return new TravelMenu(buf.readUUID(), readList(buf, 1024, TravelDestination::decode), buf.readResourceLocation(),
+                    buf.readVarInt());
+        }
+    }
+
+    /** Client -> server: travel from one trading post to another. */
+    public record Travel(UUID from, UUID to) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeUUID(from);
+            buf.writeUUID(to);
+        }
+
+        public static Travel decode(FriendlyByteBuf buf) {
+            return new Travel(buf.readUUID(), buf.readUUID());
+        }
+    }
+
+    // ---- building supplies shop ----
+
+    /** An item for sale: {@code count} of it per bundle for {@code price} emeralds; {@code left} still for sale today. */
+    public record ShopRow(ResourceLocation item, String category, int price, int count, int left, int requiredLevel) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeResourceLocation(item);
+            buf.writeUtf(category);
+            buf.writeVarInt(price);
+            buf.writeVarInt(count);
+            buf.writeVarInt(left);
+            buf.writeVarInt(requiredLevel);
+        }
+
+        public static ShopRow decode(FriendlyByteBuf buf) {
+            return new ShopRow(buf.readResourceLocation(), buf.readUtf(), buf.readVarInt(), buf.readVarInt(), buf.readVarInt(),
+                    buf.readVarInt());
+        }
+    }
+
+    /** Why an item the territory's queue lacks cannot be ordered (in full). */
+    public enum MissingStatus { OK, NOT_SOLD, LOCKED, SOLD_OUT }
+
+    /** An item the territory's queued jobs still lack, and how many bundles ordering it would buy. */
+    public record MissingRow(ResourceLocation item, int needed, int bundles, MissingStatus status) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeResourceLocation(item);
+            buf.writeVarInt(needed);
+            buf.writeVarInt(bundles);
+            buf.writeVarInt(status.ordinal());
+        }
+
+        public static MissingRow decode(FriendlyByteBuf buf) {
+            return new MissingRow(buf.readResourceLocation(), buf.readVarInt(), buf.readVarInt(),
+                    MissingStatus.values()[Math.floorMod(buf.readVarInt(), MissingStatus.values().length)]);
+        }
+    }
+
+    /** Server -> client: the shop's goods and the territory's missing materials; {@code open} opens the screen, else it refreshes. */
+    public record ShopMenu(UUID building, int level, String clerk, List<ShopRow> rows, List<MissingRow> missing, int missingCost,
+                           boolean open) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeUUID(building);
+            buf.writeVarInt(level);
+            buf.writeUtf(clerk);
+            writeList(buf, rows, (b, r) -> r.encode(b));
+            writeList(buf, missing, (b, r) -> r.encode(b));
+            buf.writeVarInt(missingCost);
+            buf.writeBoolean(open);
+        }
+
+        public static ShopMenu decode(FriendlyByteBuf buf) {
+            return new ShopMenu(buf.readUUID(), buf.readVarInt(), buf.readUtf(), readList(buf, 8192, ShopRow::decode),
+                    readList(buf, 8192, MissingRow::decode), buf.readVarInt(), buf.readBoolean());
+        }
+    }
+
+    // ---- blocks left for the player ----
+
+    private static void writeState(FriendlyByteBuf buf, BlockState state) {
+        buf.writeVarInt(Block.getId(state));
+    }
+
+    private static BlockState readState(FriendlyByteBuf buf) {
+        return Block.stateById(buf.readVarInt());
+    }
+
+    /** A block the maids left: what goes there, what is there now and why ({@link BuildJob.Problem}). */
+    public record ProblemRow(BlockPos pos, BlockState target, BlockState current, BuildJob.Problem problem) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeBlockPos(pos);
+            writeState(buf, target);
+            writeState(buf, current);
+            buf.writeVarInt(problem.ordinal());
+        }
+
+        public static ProblemRow decode(FriendlyByteBuf buf) {
+            return new ProblemRow(buf.readBlockPos(), readState(buf), readState(buf),
+                    BuildJob.Problem.values()[Math.floorMod(buf.readVarInt(), BuildJob.Problem.values().length)]);
+        }
+    }
+
+    /**
+     * Server -> client: the blocks of a queued job left for the player, nearest first ({@code total}
+     * may be more than the rows sent).
+     */
+    public record JobProblems(UUID territory, UUID job, String name, String template, ResourceLocation dimension, int total,
+                              List<ProblemRow> rows) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeUUID(territory);
+            buf.writeUUID(job);
+            buf.writeUtf(name);
+            buf.writeUtf(template);
+            buf.writeResourceLocation(dimension);
+            buf.writeVarInt(total);
+            writeList(buf, rows, (b, r) -> r.encode(b));
+        }
+
+        public static JobProblems decode(FriendlyByteBuf buf) {
+            return new JobProblems(buf.readUUID(), buf.readUUID(), buf.readUtf(), buf.readUtf(), buf.readResourceLocation(),
+                    buf.readVarInt(), readList(buf, 1024, ProblemRow::decode));
+        }
+    }
+
+    /** Client -> server: buy {@code bundles} bundles of an item; or, with no item, order everything the queue lacks. */
+    public record ShopBuy(UUID building, Optional<ResourceLocation> item, int bundles) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeUUID(building);
+            buf.writeOptional(item, FriendlyByteBuf::writeResourceLocation);
+            buf.writeVarInt(bundles);
+        }
+
+        public static ShopBuy decode(FriendlyByteBuf buf) {
+            return new ShopBuy(buf.readUUID(), buf.readOptional(FriendlyByteBuf::readResourceLocation), buf.readVarInt());
         }
     }
 }

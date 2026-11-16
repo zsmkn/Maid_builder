@@ -83,6 +83,18 @@ public final class ModNetwork {
                 msg -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () -> com.maidbuilder.client.territory.ClientTerritories.onReport(msg)));
         toClient(TerritoryPayloads.TemplateList.class, TerritoryPayloads.TemplateList::encode, TerritoryPayloads.TemplateList::decode,
                 msg -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () -> com.maidbuilder.client.territory.ClientTerritories.setTemplates(msg)));
+
+        // 1.2.0: appended after the 1.1.0 packets so that the older discriminators stay the same
+        toServer(TerritoryPayloads.Travel.class, TerritoryPayloads.Travel::encode, TerritoryPayloads.Travel::decode,
+                (player, msg) -> com.maidbuilder.common.territory.TravelActions.travel(player, msg.from(), msg.to()));
+        toServer(TerritoryPayloads.ShopBuy.class, TerritoryPayloads.ShopBuy::encode, TerritoryPayloads.ShopBuy::decode,
+                com.maidbuilder.common.territory.ShopActions::handle);
+        toClient(TerritoryPayloads.ShopMenu.class, TerritoryPayloads.ShopMenu::encode, TerritoryPayloads.ShopMenu::decode,
+                msg -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () -> com.maidbuilder.client.territory.ShopScreen.onMenu(msg)));
+        toClient(TerritoryPayloads.JobProblems.class, TerritoryPayloads.JobProblems::encode, TerritoryPayloads.JobProblems::decode,
+                msg -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () -> com.maidbuilder.client.territory.JobProblemsScreen.open(msg)));
+        toClient(TerritoryPayloads.TravelMenu.class, TerritoryPayloads.TravelMenu::encode, TerritoryPayloads.TravelMenu::decode,
+                msg -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () -> com.maidbuilder.client.territory.TravelScreen.open(msg)));
     }
 
     private static <T> void toServer(Class<T> type, BiConsumer<T, FriendlyByteBuf> encoder, Function<FriendlyByteBuf, T> decoder,

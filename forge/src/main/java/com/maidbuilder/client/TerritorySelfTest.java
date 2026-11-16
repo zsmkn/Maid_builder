@@ -18,6 +18,8 @@ import net.minecraft.client.gui.components.events.ContainerEventHandler;
 import net.minecraft.client.gui.components.events.GuiEventListener;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
+import com.maidbuilder.client.territory.ProblemHighlights;
+import com.maidbuilder.network.TerritoryPayloads;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.Mirror;
@@ -112,7 +114,53 @@ final class TerritorySelfTest {
                 if (player != null && id != null) player.level().setBlockAndUpdate(pos, Blocks.AIR.defaultBlockState());
             });
         }
-        return t >= 115;
+        if (t == 109) {
+            // the shop screen with a few goods (in game the list comes from the server)
+            java.util.function.Function<String, ResourceLocation> item = ResourceLocation::new;
+            var rows = java.util.List.of(
+                    new TerritoryPayloads.ShopRow(item.apply("oak_planks"), "wood", 2, 16, 112, 2),
+                    new TerritoryPayloads.ShopRow(item.apply("spruce_stairs"), "wood", 2, 16, 128, 2),
+                    new TerritoryPayloads.ShopRow(item.apply("dark_oak_log"), "wood", 2, 16, 0, 2),
+                    new TerritoryPayloads.ShopRow(item.apply("cherry_fence"), "wood", 2, 16, 128, 3),
+                    new TerritoryPayloads.ShopRow(item.apply("stone_bricks"), "stone", 2, 16, 128, 2));
+            var missing = java.util.List.of(new TerritoryPayloads.MissingRow(item.apply("oak_planks"), 40, 3, TerritoryPayloads.MissingStatus.OK));
+            mc.setScreen(new com.maidbuilder.client.territory.ShopScreen(
+                    new TerritoryPayloads.ShopMenu(UUID.randomUUID(), 2, "Reimu", rows, missing, 6, true)));
+        }
+        if (t == 114) shot(mc, "shop");
+        if (t == 115) {
+            // the details of blocks left for the player (in game the list comes from the server)
+            BlockPos at = mc.player.blockPosition();
+            var rows = java.util.List.of(
+                    new TerritoryPayloads.ProblemRow(at.offset(2, 0, 1), Blocks.OAK_PLANKS.defaultBlockState(), Blocks.CHEST.defaultBlockState(),
+                            com.maidbuilder.common.job.BuildJob.Problem.UNBREAKABLE),
+                    new TerritoryPayloads.ProblemRow(at.offset(4, 3, 2), Blocks.LANTERN.defaultBlockState(), Blocks.AIR.defaultBlockState(),
+                            com.maidbuilder.common.job.BuildJob.Problem.NO_SUPPORT),
+                    new TerritoryPayloads.ProblemRow(at.offset(-6, 7, 3), Blocks.OAK_STAIRS.defaultBlockState(), Blocks.AIR.defaultBlockState(),
+                            com.maidbuilder.common.job.BuildJob.Problem.UNREACHABLE),
+                    new TerritoryPayloads.ProblemRow(at.offset(1, 1, -5), Blocks.AIR.defaultBlockState(), Blocks.BEDROCK.defaultBlockState(),
+                            com.maidbuilder.common.job.BuildJob.Problem.UNBREAKABLE));
+            mc.setScreen(new com.maidbuilder.client.territory.JobProblemsScreen(null, new TerritoryPayloads.JobProblems(UUID.randomUUID(),
+                    UUID.randomUUID(), "", "maidbuilder:dormitory", mc.level.dimension().location(), 4, rows)));
+        }
+        if (t == 120) shot(mc, "problems");
+        if (t == 121) {
+            mc.setScreen(null);
+            // 1.20.1 port check: the outlines of blocks left for the player show through a wall (with
+            // shaders too: runClientShaderTest), as after "Outline all"
+            net.minecraft.core.Direction facing = mc.player.getDirection();
+            BlockPos at = mc.player.blockPosition();
+            outlineWall = at.relative(facing, 3);
+            setWall(mc, facing, true);
+            ProblemHighlights.show(mc.level.dimension().location(), java.util.List.of(at.relative(facing, 5), at.relative(facing, 6).above(),
+                    at.relative(facing, 5).relative(facing.getClockWise(), 2), at.relative(facing, 2).relative(facing.getCounterClockWise(), 2)));
+        }
+        if (t == 126) shot(mc, "problems_outline");
+        if (t == 127) {
+            ProblemHighlights.clear();
+            setWall(mc, mc.player.getDirection(), false);
+        }
+        return t >= 130;
     }
 
     private static net.minecraft.world.item.ItemStack savedHand = net.minecraft.world.item.ItemStack.EMPTY;
@@ -188,6 +236,25 @@ final class TerritorySelfTest {
         var backpack = maid.getAvailableBackpackInv();
         for (int i = 0; i < backpack.getSlots(); i++) backpack.insertItem(i, new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.WHEAT, 64), false);
         com.maidbuilder.common.maid.WorkplaceHandler.check(level, maid, com.maidbuilder.common.maid.WorkplaceMaidData.of(maid));
+    }
+
+    private static BlockPos outlineWall = BlockPos.ZERO;
+
+    /** A 3x3 stone wall across the view (or air again), on the integrated server. */
+    private static void setWall(Minecraft mc, net.minecraft.core.Direction facing, boolean build) {
+        var server = mc.getSingleplayerServer();
+        if (server == null) return;
+        BlockPos centre = outlineWall;
+        net.minecraft.core.Direction side = facing.getClockWise();
+        server.execute(() -> {
+            var level = server.overworld();
+            for (int i = -1; i <= 1; i++) {
+                for (int y = 0; y <= 2; y++) {
+                    level.setBlockAndUpdate(centre.relative(side, i).above(y),
+                            build ? Blocks.STONE_BRICKS.defaultBlockState() : Blocks.AIR.defaultBlockState());
+                }
+            }
+        });
     }
 
     private static void shot(Minecraft mc, String name) {

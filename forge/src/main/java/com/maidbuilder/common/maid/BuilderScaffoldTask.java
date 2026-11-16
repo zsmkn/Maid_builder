@@ -132,7 +132,7 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
         }
         if (column == null) {
             MaidBuilder.LOGGER.debug("Maid {} found neither a way nor room for scaffolding to reach {}", maid.getUUID(), target);
-            job.recordAttempt(index, gameTime);
+            job.recordAttempt(index, gameTime, BuildJob.Problem.UNREACHABLE);
             return;
         }
         if (!job.claimColumn(column.key(), maid.getUUID())) {
@@ -266,6 +266,12 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
     }
 
     /** Vertical speed {@code vy} plus a small pull towards the column's centre line. */
+    /** Whether her whole box is within the column's x/z cell (nothing next to it can hold her up). */
+    private static boolean insideCell(EntityMaid maid, BlockPos base) {
+        net.minecraft.world.phys.AABB box = maid.getBoundingBox();
+        return box.minX >= base.getX() && box.maxX <= base.getX() + 1 && box.minZ >= base.getZ() && box.maxZ <= base.getZ() + 1;
+    }
+
     private Vec3 towardCentre(EntityMaid maid, double vy) {
         return new Vec3((base.getX() + 0.5 - maid.getX()) * 0.3, vy, (base.getZ() + 0.5 - maid.getZ()) * 0.3);
     }
@@ -440,7 +446,14 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
         maid.setShiftKeyDown(true);
         maid.resetFallDistance();
         boolean over = ReachPlanner.overColumn(maid, base);
-        if (over && !maid.onGround()) maid.setDeltaMovement(towardCentre(maid, -0.25));
+        if (over && !maid.onGround()) {
+            maid.setDeltaMovement(towardCentre(maid, -0.25));
+        } else if (over && maid.getY() >= base.getY() + 0.5 && !insideCell(maid, base)) {
+            // Standing on top partly over the block next to the column (a wall she built from it):
+            // that block holds her up however she sneaks, so step onto the middle of the column first.
+            Vec3 centre = towardCentre(maid, 0);
+            maid.setDeltaMovement(centre.x, maid.getDeltaMovement().y, centre.z);
+        }
         boolean down = maid.onGround() && (maid.getY() < base.getY() + 0.5 || !over);
         if (down || stageTicks > 60 + 10 * (standY - base.getY())) {
             maid.setShiftKeyDown(false);
@@ -460,7 +473,7 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
 
     private void failClaimed(EntityMaid maid, long gameTime) {
         int index = job.claimOf(maid.getUUID());
-        if (index >= 0) job.recordAttempt(index, gameTime);
+        if (index >= 0) job.recordAttempt(index, gameTime, BuildJob.Problem.UNREACHABLE);
         job.release(maid.getUUID());
     }
 

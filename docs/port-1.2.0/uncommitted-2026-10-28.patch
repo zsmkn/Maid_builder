@@ -1,0 +1,273 @@
+diff --git a/forge/src/main/java/com/maidbuilder/common/maid/BuilderFetchMaterialTask.java b/forge/src/main/java/com/maidbuilder/common/maid/BuilderFetchMaterialTask.java
+index e83f1db..a1b3efe 100644
+--- a/forge/src/main/java/com/maidbuilder/common/maid/BuilderFetchMaterialTask.java
++++ b/forge/src/main/java/com/maidbuilder/common/maid/BuilderFetchMaterialTask.java
+@@ -58,6 +58,9 @@ public class BuilderFetchMaterialTask extends Behavior<EntityMaid> {
+     private static final double TEAMMATE_RANGE = 32;
+     /** Smallest amount worth walking to a teammate for. */
+     private static final int MIN_SHARE = 4;
++    /** Failed trips in a row after which she walks somewhere else at random before trying again. */
++    private static final int STUCK_TRIPS = 2;
++    private static final int WANDER_RANGE = 8;
+ 
+     private final BuilderSession session;
+     private final float speed;
+@@ -70,6 +73,10 @@ public class BuilderFetchMaterialTask extends Behavior<EntityMaid> {
+     private Map<Item, Integer> wanted;
+     /** The way round to the container when the game's path finder found none. */
+     private final RouteFollower route = new RouteFollower();
++    /** Trips in a row that ended without reaching the container or teammate. */
++    private int failedTrips;
++    /** Set when she was sent off to wander: the walk target is hers to keep when the task stops. */
++    private boolean wandering;
+ 
+     public BuilderFetchMaterialTask(BuilderSession session, float speed) {
+         super(ImmutableMap.of(
+@@ -205,6 +212,7 @@ public class BuilderFetchMaterialTask extends Behavior<EntityMaid> {
+         if (target == null) return;
+         if (maid.distanceToSqr(target) <= TAKE_DISTANCE * TAKE_DISTANCE) {
+             take(level, maid);
++            failedTrips = 0;
+             container = null;
+             teammate = null;
+         } else if (container != null && !route.planned() && stopsShort(maid, target)) {
+@@ -229,9 +237,26 @@ public class BuilderFetchMaterialTask extends Behavior<EntityMaid> {
+             cooldown = NOTHING_FOUND_INTERVAL;
+             container = null;
+             teammate = null;
++            if (++failedTrips >= STUCK_TRIPS) unstick(level, maid);
+         }
+     }
+ 
++    /**
++     * Stuck where she stands (the same trip keeps failing): lets go of the block she meant to build
++     * and walks to a random spot nearby, so the next try starts from somewhere else.
++     */
++    private void unstick(ServerLevel level, EntityMaid maid) {
++        failedTrips = 0;
++        UUID jobId = BuilderMaidData.jobOf(maid);
++        if (jobId != null) BuildJobManager.loaded(level.getServer(), jobId).ifPresent(job -> job.release(maid.getUUID()));
++        session.scaffoldStep = -1;
++        Vec3 spot = net.minecraft.world.entity.ai.util.LandRandomPos.getPos(maid, WANDER_RANGE, 3);
++        MaidBuilder.LOGGER.debug("Maid {} seems stuck at {}: wandering to {}", maid.getUUID(), maid.blockPosition(), spot);
++        if (spot == null) return;
++        maid.getBrain().setMemory(MemoryModuleType.WALK_TARGET, new WalkTarget(spot, speed, 0));
++        wandering = true;
++    }
++
+     /**
+      * Whether the game's path finder gave her only part of the way, ending out of reach of the
+      * container. (A container is never a path's end itself, so "cannot reach" alone means nothing:
+@@ -266,6 +291,7 @@ public class BuilderFetchMaterialTask extends Behavior<EntityMaid> {
+         teammate = null;
+         wanted = null;
+         route.reset();
+-        maid.getBrain().eraseMemory(MemoryModuleType.WALK_TARGET);
++        if (!wandering) maid.getBrain().eraseMemory(MemoryModuleType.WALK_TARGET);
++        wandering = false;
+     }
+ }
+diff --git a/forge/src/main/java/com/maidbuilder/common/maid/ReachPlanner.java b/forge/src/main/java/com/maidbuilder/common/maid/ReachPlanner.java
+index 0d4b871..4ce74a4 100644
+--- a/forge/src/main/java/com/maidbuilder/common/maid/ReachPlanner.java
++++ b/forge/src/main/java/com/maidbuilder/common/maid/ReachPlanner.java
+@@ -396,9 +396,14 @@ final class ReachPlanner {
+ 
+     // ---- where the maid is ----
+ 
++    /** Higher than a jump from the ground takes her (about 1.25 blocks). */
++    private static final double ABOVE_JUMP = 1.3;
++
+     /**
+      * The tracked column the maid is standing on or climbing in, if any. Standing in its bottom
+-     * block on the ground does not count: that is where she enters and leaves it.
++     * block on the ground does not count: that is where she enters and leaves it. Nor does a jump
++     * from there (e.g. onto a chair next to it on her way out): only standing on a scaffold, or
++     * being higher than a jump.
+      */
+     @Nullable
+     static List<BlockPos> columnAt(EntityMaid maid, BuildJob job) {
+@@ -406,7 +411,9 @@ final class ReachPlanner {
+         BlockPos feet = maid.blockPosition();
+         if (!job.isScaffold(feet) && !job.isScaffold(feet.below())) return null;
+         List<BlockPos> column = job.scaffoldColumns().get(BuildJob.columnKey(feet));
+-        return column != null && maid.getY() > column.getFirst().getY() + 0.5 ? column : null;
++        if (column == null) return null;
++        double up = maid.getY() - column.getFirst().getY();
++        return up > ABOVE_JUMP || maid.onGround() && up > 0.5 ? column : null;
+     }
+ 
+     /** Whether the maid's box sits inside the column's x/z cell (she is climbing or standing on it). */
+@@ -454,16 +461,17 @@ final class ReachPlanner {
+                 BlockPos beside = at.offset(side[0], 0, side[1]);
+                 if (!level.isLoaded(beside)) continue;
+                 BlockPos next = null;
+-                if (headroom && canWalkAt(level, maid, beside.above())) {
++                if (headroom && canWalkAt(level, beside.above())) {
+                     next = beside.above();
+                 } else if (walkable(level, beside) && walkable(level, beside.above())) {
+                     for (int drop = 0; drop <= MAX_DROP; drop++) {
+                         BlockPos feet = beside.below(drop);
+-                        if (canWalkAt(level, maid, feet)) {
++                        if (canWalkAt(level, feet)) {
+                             next = feet;
+                             break;
+                         }
+-                        if (!walkable(level, feet.below())) break;
++                        // a scaffold stops the fall (she would land on top of it, which the search does not use)
++                        if (!passable(level, feet.below())) break;
+                     }
+                 }
+                 if (next != null && seen.add(next)) open.add(new Node(next, node.length() + 1, node));
+@@ -472,14 +480,31 @@ final class ReachPlanner {
+         return null;
+     }
+ 
+-    /** Like {@link #canStandAt}, but closed wooden doors count as open: maids open them. */
+-    private static boolean canWalkAt(Level level, EntityMaid maid, BlockPos feet) {
+-        BlockPos below = feet.below();
+-        return level.getBlockState(below).entityCanStandOn(level, below, maid)
+-                && walkable(level, feet) && walkable(level, feet.above());
++    /** Like {@link #canStandAt}, but closed wooden doors count as open (maids open them) and she walks under or through scaffolding. */
++    private static boolean canWalkAt(Level level, BlockPos feet) {
++        return walksOn(level, feet.below()) && walkable(level, feet) && walkable(level, feet.above());
+     }
+ 
++    /**
++     * A floor for the ground search: a block whose top is between half and full height, so stairs
++     * and slabs (a door step) count. Not scaffolding (the search keeps off the job's columns), nor
++     * fences and walls, which a maid cannot step onto.
++     */
++    private static boolean walksOn(Level level, BlockPos pos) {
++        BlockState state = level.getBlockState(pos);
++        if (state.is(Blocks.SCAFFOLDING)) return false;
++        net.minecraft.world.phys.shapes.VoxelShape shape = state.getCollisionShape(level, pos);
++        if (shape.isEmpty()) return false;
++        double top = shape.max(Direction.Axis.Y);
++        return top >= 0.5 && top <= 1.0;
++    }
++
++    /**
++     * A cell she can walk through: empty, a wooden door, or scaffolding, which has no collision
++     * from below or inside (asked without an entity, the game answers as if standing on top).
++     */
+     private static boolean walkable(Level level, BlockPos pos) {
+-        return passable(level, pos) || net.minecraft.world.level.block.DoorBlock.isWoodenDoor(level.getBlockState(pos));
++        BlockState state = level.getBlockState(pos);
++        return passable(level, pos) || net.minecraft.world.level.block.DoorBlock.isWoodenDoor(state) || state.is(Blocks.SCAFFOLDING);
+     }
+ }
+diff --git a/tools/TemplateGenerator.java b/tools/TemplateGenerator.java
+index 81dbae4..0bd8bae 100644
+--- a/tools/TemplateGenerator.java
++++ b/tools/TemplateGenerator.java
+@@ -50,6 +50,30 @@ public class TemplateGenerator {
+         templates.put("watchtower", watchtower());
+         templates.put("shrine", shrine());
+         templates.put("builders_shop", buildersShop());
++        // Fine versions (building level 2): same size and layout, finer materials and trim.
++        Map<String, Grid> fine = new java.util.LinkedHashMap<>();
++        fine.put("warehouse", fine(warehouse(), g -> houseTrim(g, 0, 1, 7, 7, 3)));
++        fine.put("dormitory", fine(dormitory(), g -> houseTrim(g, 1, 1, 9, 7, 3)));
++        fine.put("canteen", fine(canteen(), g -> houseTrim(g, 1, 1, 9, 7, 3)));
++        fine.put("village_hall", fine(villageHall(), g -> houseTrim(g, 1, 1, 11, 9, 3)));
++        fine.put("small_greenhouse", fine(greenhouse(1), g -> greenhouseTrim(g, 1)));
++        fine.put("large_greenhouse", fine(greenhouse(2), g -> greenhouseTrim(g, 2)));
++        fine.put("ranch", fine(ranch(1), g -> {
++        }));
++        fine.put("large_ranch", fine(ranch(2), g -> {
++        }));
++        fine.put("sugar_cane_farm", fine(sugarCaneFarm(), g -> {
++        }));
++        fine.put("lumberyard", fine(lumberyard(), g -> g.replace(Map.of("oak_planks", "spruce_planks"))));
++        fine.put("apiary", fine(apiary(), g -> {
++        }));
++        for (Map.Entry<String, Grid> e : fine.entrySet()) {
++            Grid basic = templates.get(e.getKey());
++            if (!basic.size().equals(e.getValue().size())) {
++                throw new IllegalStateException(e.getKey() + "_fine is " + e.getValue().size() + ", not " + basic.size());
++            }
++            templates.put(e.getKey() + "_fine", e.getValue());
++        }
+         for (Map.Entry<String, Grid> e : templates.entrySet()) {
+             Schematic s = e.getValue().toSchematic(e.getKey());
+             try (OutputStream os = Files.newOutputStream(out.resolve(e.getKey() + ".litematic"))) {
+@@ -501,6 +525,63 @@ public class TemplateGenerator {
+         return g;
+     }
+ 
++    // ---------------------------------------------------------------- fine versions
++
++    /** Material swaps from a basic template to its fine version. */
++    static final Map<String, String> FINE = Map.ofEntries(
++            Map.entry("cobblestone", "stone_bricks"),
++            Map.entry("cobblestone_slab", "stone_brick_slab"),
++            Map.entry("cobblestone_wall", "stone_brick_wall"),
++            Map.entry("oak_log", "spruce_log"),
++            Map.entry("oak_stairs", "dark_oak_stairs"),
++            Map.entry("oak_slab", "dark_oak_slab"),
++            Map.entry("oak_door", "spruce_door"),
++            Map.entry("oak_fence", "spruce_fence"),
++            Map.entry("oak_fence_gate", "spruce_fence_gate"),
++            Map.entry("torch", "lantern"));
++
++    /** The fine version of a basic template: swapped materials, then the template's own trim. */
++    static Grid fine(Grid basic, java.util.function.Consumer<Grid> trim) {
++        basic.replace(FINE);
++        trim.accept(basic);
++        return basic;
++    }
++
++    private static final String[] POTS = {"potted_poppy", "potted_dandelion", "potted_azure_bluet", "potted_oxeye_daisy"};
++
++    /**
++     * Trim of a {@link #house}: a stripped spruce beam round the top of the walls, a lantern post on
++     * each side of the door step and potted flowers along the front.
++     */
++    static void houseTrim(Grid g, int ox, int oz, int w, int d, int top) {
++        for (int x = 0; x < w; x++) {
++            for (int z = 0; z < d; z++) {
++                boolean edgeX = x == 0 || x == w - 1, edgeZ = z == 0 || z == d - 1;
++                if ((edgeX || edgeZ) && !(edgeX && edgeZ)) g.set(ox + x, top, oz + z, "stripped_spruce_log[axis=" + (edgeZ ? "x" : "z") + "]");
++            }
++        }
++        int doorX = ox + w / 2;
++        for (int x : new int[]{doorX - 1, doorX + 1}) {
++            g.set(x, 0, oz - 1, "spruce_fence");
++            g.set(x, 1, oz - 1, "lantern");
++        }
++        int pot = 0;
++        for (int x = ox; x < ox + w; x++) {
++            if (Math.abs(x - doorX) <= 1 || (x - ox) % 2 != 0) continue;
++            g.set(x, 0, oz - 1, POTS[pot++ % POTS.length]);
++        }
++    }
++
++    /** Trim of a {@link #greenhouse}: lanterns at the door and one hanging over each water hole. */
++    static void greenhouseTrim(Grid g, int fields) {
++        int iw = fields * 9 + (fields - 1), w = iw + 2, oz = 1, top = 3, doorX = w / 2;
++        for (int x : new int[]{doorX - 1, doorX + 1}) {
++            g.set(x, 0, oz - 1, "spruce_fence");
++            g.set(x, 1, oz - 1, "lantern");
++        }
++        for (int f = 0; f < fields; f++) g.set(1 + f * 10 + 4, top, oz + 5, "lantern[hanging=true]");
++    }
++
+     // ---------------------------------------------------------------- building blocks
+ 
+     /**
+@@ -610,6 +691,14 @@ public class TemplateGenerator {
+                     for (int z = Math.min(z1, z2); z <= Math.max(z1, z2); z++) set(x, y, z, state);
+         }
+ 
++        /** Swaps blocks by path (without namespace), keeping their properties. */
++        void replace(Map<String, String> paths) {
++            blocks.replaceAll((p, s) -> {
++                String to = paths.get(s.path());
++                return to == null ? s : new BlockStateData("minecraft:" + to, s.properties());
++            });
++        }
++
+         BlockStateData get(IntPos p) {
+             return blocks.getOrDefault(p, BlockStateData.AIR);
+         }

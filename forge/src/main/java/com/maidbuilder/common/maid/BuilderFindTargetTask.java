@@ -4,6 +4,7 @@ import com.github.tartaricacid.touhoulittlemaid.entity.ai.brain.task.MaidCheckRa
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 import com.github.tartaricacid.touhoulittlemaid.init.InitEntities;
 import com.google.common.collect.ImmutableMap;
+import com.maidbuilder.MaidBuilder;
 import com.maidbuilder.MaidBuilderConfig;
 import com.maidbuilder.common.BlockBreaker;
 import com.maidbuilder.common.job.BuildJob;
@@ -32,8 +33,16 @@ import java.util.UUID;
  */
 public class BuilderFindTargetTask extends MaidCheckRateTask {
     private static final int IDLE_RECHECK_TICKS = 40;
+    /** Setting off to the same step from the same block for this long means the walk there fails. */
+    private static final int STUCK_WALK_TICKS = 200;
+    private static final int WANDER_RANGE = 8;
     private final BuilderSession session;
     private final float speed;
+    /** The step she last set off to, where she stood then and since when she keeps setting off to it from there. */
+    private int lastWalkStep = -1;
+    @javax.annotation.Nullable
+    private BlockPos lastWalkFrom;
+    private long lastWalkSince;
 
     public BuilderFindTargetTask(BuilderSession session, float speed) {
         super(ImmutableMap.of(
@@ -82,14 +91,35 @@ public class BuilderFindTargetTask extends MaidCheckRateTask {
             return;
         }
         BlockPos stand = ReachPlanner.findStand(level, maid, job, pos);
+        boolean again = index == lastWalkStep && maid.blockPosition().equals(lastWalkFrom);
+        if (stand != null && again && gameTime - lastWalkSince >= STUCK_WALK_TICKS) {
+            // She keeps setting off to this step from this very block (e.g. wedged against a fence,
+            // and the walk ends without her getting anywhere): count it as a failed try like any
+            // other walk that ends out of reach, and walk off somewhere nearby so the next try
+            // starts from another spot.
+            net.minecraft.world.phys.Vec3 away = net.minecraft.world.entity.ai.util.LandRandomPos.getPos(maid, WANDER_RANGE, 3);
+            MaidBuilder.LOGGER.debug("Maid {} got nowhere walking to {} (still at {}): wandering to {}", maid.getUUID(), stand,
+                    maid.blockPosition(), away);
+            lastWalkStep = -1;
+            job.recordAttempt(index, level.getGameTime(), BuildJob.Problem.UNREACHABLE);
+            job.release(maid.getUUID());
+            if (away != null) maid.getBrain().setMemory(MemoryModuleType.WALK_TARGET, new WalkTarget(away, speed, 0));
+            setNextCheckTickCount(IDLE_RECHECK_TICKS);
+            return;
+        }
         if (stand != null) {
+            if (!again) {
+                lastWalkStep = index;
+                lastWalkFrom = maid.blockPosition();
+                lastWalkSince = gameTime;
+            }
             maid.getBrain().setMemory(InitEntities.TARGET_POS.get(), new BlockPosTracker(pos));
             maid.getBrain().setMemory(MemoryModuleType.WALK_TARGET, new WalkTarget(stand, speed, 0));
             maid.getBrain().setMemory(MemoryModuleType.LOOK_TARGET, new BlockPosTracker(pos));
         } else if (MaidBuilderConfig.USE_SCAFFOLDING.get()) {
             session.scaffoldStep = index; // keeps the claim; BuilderScaffoldTask takes over
         } else {
-            job.recordAttempt(index, level.getGameTime());
+            job.recordAttempt(index, level.getGameTime(), BuildJob.Problem.UNREACHABLE);
             job.release(maid.getUUID());
             setNextCheckTickCount(IDLE_RECHECK_TICKS);
         }
@@ -125,7 +155,7 @@ public class BuilderFindTargetTask extends MaidCheckRateTask {
             if (job.isClearStep(i)) {
                 BlockPos primary = BlockBreaker.primaryPos(level, pos);
                 if (!BlockBreaker.breakable(level, primary, level.getBlockState(primary))) {
-                    job.setStatus(i, BuildJob.NEEDS_PLAYER); // a chest, bedrock...: no use walking there
+                    job.leaveForPlayer(i, BuildJob.Problem.UNBREAKABLE); // a chest, bedrock...: no use walking there
                     return false;
                 }
                 if (primary.equals(footing)) return false;

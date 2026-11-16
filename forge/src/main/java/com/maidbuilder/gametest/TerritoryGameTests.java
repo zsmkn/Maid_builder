@@ -238,6 +238,96 @@ public final class TerritoryGameTests {
         helper.succeed();
     }
 
+    /**
+     * A repair whose last block the maids had to leave for the player stays queued (it used to be
+     * dropped as finished) with the reason kept, also across a save; the details list it; once the
+     * chest in the way is gone the block goes back to the maids, and once the right block stands
+     * there the repair completes. Skipping gives up on the blocks and lets the job finish.
+     */
+    @GameTest(template = FLOOR, batch = "territory_problems")
+    public static void blocksLeftForPlayerStayQueued(GameTestHelper helper) {
+        clearNear(helper);
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerPlayer owner = player(helper, "mb_problems_owner");
+        clearOwnedBy(server, owner.getUUID());
+        try {
+            if (!useFlag(helper, owner, new BlockPos(1, 1, 14))) helper.fail("flag was not placed");
+            Territory t = TerritoryManager.data(server).atFlag(helper.getLevel().dimension(), helper.absolutePos(new BlockPos(1, 2, 14)));
+            TemplateRegistry.Entry entry = testTemplate("problem_hut", 1, 9, "test_problem_hut", "production");
+            RegisteredBuilding b = instantBuilding(helper, owner, t, entry, new BlockPos(5, 2, 5));
+            BlockPos chestRel = new BlockPos(5, 2, 5);
+            helper.setBlock(chestRel, Blocks.CHEST);
+            helper.setBlock(new BlockPos(6, 2, 5), Blocks.AIR);
+            helper.setBlock(new BlockPos(7, 2, 5), Blocks.AIR);
+            BuildingIntegrity.checkNow(server, t, b);
+            if (b.isWorking()) helper.fail("damaged building still working: " + b.integrity());
+
+            if (!TerritoryUpgrades.repair(owner, t, b.id())) helper.fail("repair not queued");
+            BuildJob repair = BuildJobManager.loaded(server, t.jobQueue().get(0)).orElseThrow();
+            BlockPos chest = helper.absolutePos(chestRel);
+            int chestStep = -1;
+            for (int i = 0; i < repair.size(); i++) {
+                if (repair.pos(i).equals(chest) && !repair.isClearStep(i)) chestStep = i;
+            }
+            if (chestStep < 0) helper.fail("no step at the chest");
+            // the maids build the rest and leave the chest's cell to the player
+            for (int i = 0; i < repair.size(); i++) {
+                if (i == chestStep) continue;
+                if (!BlockPlacer.matches(helper.getLevel().getBlockState(repair.pos(i)), repair.target(i))) {
+                    BlockPlacer.placeExact(helper.getLevel(), repair.pos(i), repair.target(i));
+                }
+                repair.setStatus(i, BuildJob.DONE);
+            }
+            repair.leaveForPlayer(chestStep, BuildJob.Problem.UNBREAKABLE);
+            if (!repair.isComplete()) helper.fail("only the player's block should be left");
+
+            TerritoryTicker.updateQueue(server, t);
+            if (!t.jobQueue().contains(repair.id())) helper.fail("a repair with a block left for the player was dropped from the queue");
+            if (BuildJob.load(repair.save()).problem(chestStep) != BuildJob.Problem.UNBREAKABLE) helper.fail("reason not saved");
+            TerritoryPayloads.JobProblems details = com.maidbuilder.common.territory.JobProblems.details(helper.getLevel(), t, repair, chest);
+            if (details.total() != 1 || details.rows().size() != 1) helper.fail("details list " + details.total() + " blocks");
+            TerritoryPayloads.ProblemRow row = details.rows().get(0);
+            if (!row.pos().equals(chest) || row.problem() != BuildJob.Problem.UNBREAKABLE || !row.current().is(Blocks.CHEST)
+                    || !BlockPlacer.matches(row.target(), repair.target(chestStep))) {
+                helper.fail("wrong row " + row);
+            }
+
+            helper.setBlock(chestRel, Blocks.AIR); // the player takes the chest away
+            TerritoryTicker.updateQueue(server, t);
+            if (repair.status(chestStep) != BuildJob.PENDING) helper.fail("freed block not handed back to the maids: " + repair.status(chestStep));
+            repair.leaveForPlayer(chestStep, BuildJob.Problem.UNREACHABLE);
+            TerritoryTicker.updateQueue(server, t);
+            if (repair.status(chestStep) != BuildJob.NEEDS_PLAYER) helper.fail("an unreachable empty cell went back to the maids");
+            BlockPlacer.placeExact(helper.getLevel(), chest, repair.target(chestStep)); // the player builds it
+            TerritoryTicker.updateQueue(server, t);
+            if (t.jobQueue().contains(repair.id())) helper.fail("repair not completed after the player built the block");
+            if (!b.isWorking() || b.integrity() != 100) helper.fail("not working after the repair: " + b.integrity());
+
+            // retry and skip from the details screen
+            helper.setBlock(new BlockPos(6, 2, 5), Blocks.AIR);
+            helper.setBlock(new BlockPos(7, 2, 5), Blocks.AIR);
+            helper.setBlock(new BlockPos(5, 2, 6), Blocks.AIR);
+            BuildingIntegrity.checkNow(server, t, b);
+            if (!TerritoryUpgrades.repair(owner, t, b.id())) helper.fail("second repair not queued");
+            BuildJob second = BuildJobManager.loaded(server, t.jobQueue().get(0)).orElseThrow();
+            for (int i = 0; i < second.size(); i++) {
+                if (second.status(i) == BuildJob.PENDING) second.leaveForPlayer(i, BuildJob.Problem.UNREACHABLE);
+            }
+            int left = second.count(BuildJob.NEEDS_PLAYER);
+            com.maidbuilder.common.territory.JobProblems.resolve(owner, t, second.id(), false);
+            if (second.count(BuildJob.PENDING) != left || second.count(BuildJob.NEEDS_PLAYER) != 0) helper.fail("retry did not hand the blocks back");
+            for (int i = 0; i < second.size(); i++) {
+                if (second.status(i) == BuildJob.PENDING) second.leaveForPlayer(i, BuildJob.Problem.UNREACHABLE);
+            }
+            com.maidbuilder.common.territory.JobProblems.resolve(owner, t, second.id(), true);
+            if (t.jobQueue().contains(second.id())) helper.fail("skipped job still queued");
+            if (t.buildings().size() != 1) helper.fail("a skipped repair registered a new building");
+        } finally {
+            clearOwnedBy(server, owner.getUUID());
+        }
+        helper.succeed();
+    }
+
     /** A maid in home mode inside the territory is a resident (and counts for prosperity) until home mode is off. */
     @GameTest(template = FLOOR, batch = "territory_residents", timeoutTicks = 800)
     public static void residentsComeAndGo(GameTestHelper helper) {
@@ -846,7 +936,11 @@ public final class TerritoryGameTests {
 
         // templates
         List<String> expected = List.of("apiary", "dormitory", "fishing_dock", "large_greenhouse", "large_ranch", "lumberyard", "pavilion",
-                "ranch", "small_greenhouse", "sugar_cane_farm", "warehouse");
+                "ranch", "small_greenhouse", "sugar_cane_farm", "warehouse",
+                // 1.2.0: service buildings and the building supplies shop
+                "builders_shop", "canteen", "shrine", "trading_post", "village_hall", "watchtower");
+        long packTemplates = TemplateRegistry.all().stream().filter(e -> !e.def().id().getPath().startsWith("test/")).count();
+        if (packTemplates != expected.size()) helper.fail("expected " + expected.size() + " templates, got " + packTemplates);
         for (String path : expected) {
             TemplateRegistry.Entry entry = TemplateRegistry.entry(MaidBuilder.id(path));
             if (entry == null) {
@@ -898,6 +992,42 @@ public final class TerritoryGameTests {
                 if (!any) helper.fail("level " + def.level() + ": upgrade item " + key + " matches nothing");
             }
         }
+
+        // 1.2.0: shop shelves (tags/items/, not 1.21's tags/item/) and the service condition of level 5
+        if (BuiltInRegistries.ITEM.getTag(com.maidbuilder.common.territory.ShopCatalog.NOT_FOR_SALE).map(set -> set.size()).orElse(0) == 0) {
+            helper.fail("tag maidbuilder:not_for_sale is empty");
+        }
+        if (!Items.BELL.builtInRegistryHolder().is(com.maidbuilder.common.territory.ShopCatalog.NOT_FOR_SALE)) helper.fail("bell not in not_for_sale");
+        var offers = com.maidbuilder.common.territory.ShopCatalog.offers();
+        java.util.Set<String> categories = new java.util.LinkedHashSet<>();
+        offers.values().forEach(o -> categories.add(o.category()));
+        if (!categories.equals(java.util.Set.of("wood", "stone", "nature", "brick", "color", "decor", "rare"))) {
+            helper.fail("shop shelves: " + categories);
+        }
+        if (!com.maidbuilder.common.territory.ShopCatalog.unknownEntries().isEmpty()) {
+            helper.fail("shop entries unknown on 1.20.1: " + com.maidbuilder.common.territory.ShopCatalog.unknownEntries());
+        }
+        MaidBuilder.LOGGER.info("SHOP {} goods on {} shelves", offers.size(), categories.size());
+        if (levels.stream().filter(d -> d.level() == 5).flatMap(d -> d.requiredBuildings().stream())
+                .noneMatch(r -> "service".equals(r.category()) && r.count() == 2)) {
+            helper.fail("level 5 does not need two service buildings");
+        }
+
+        // 1.2.0: building NBT (next event, shop sales) round trip; a 1.1.0 building has none of it
+        CompoundTag b = new RegisteredBuilding(java.util.UUID.randomUUID(), "maidbuilder:builders_shop", "hash", new BlockPos(1, 2, 3),
+                net.minecraft.world.level.block.Rotation.NONE, net.minecraft.world.level.block.Mirror.NONE, new BlockPos(1, 2, 3), new BlockPos(9, 9, 9)).save();
+        CompoundTag old = b.copy();
+        b.putLong("NextEvent", 123456L);
+        CompoundTag soldTag = new CompoundTag();
+        soldTag.putInt("minecraft:oak_planks", 48);
+        b.put("Sold", soldTag);
+        b.putLong("SoldDay", 7L);
+        RegisteredBuilding copy = RegisteredBuilding.load(RegisteredBuilding.load(b).save());
+        if (copy.nextEvent() != 123456L || copy.soldOn(7, "minecraft:oak_planks") != 48 || copy.soldOn(8, "minecraft:oak_planks") != 0) {
+            helper.fail("building next event / sales changed: " + copy.nextEvent() + " " + copy.soldOn(7, "minecraft:oak_planks"));
+        }
+        RegisteredBuilding oldCopy = RegisteredBuilding.load(old);
+        if (oldCopy.nextEvent() != 0 || oldCopy.soldOn(-1, "minecraft:oak_planks") != 0) helper.fail("a 1.1.0 building did not load empty");
 
         // flag recipe and loot table
         var recipe = server.getRecipeManager().byKey(MaidBuilder.id("territory_flag"));

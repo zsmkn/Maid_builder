@@ -81,7 +81,7 @@ class ConfigListScreen extends Screen {
                     });
         } else {
             EditBox box = new EditBox(font, 0, 0, 98, 18, entry.label());
-            box.setMaxLength(32);
+            box.setMaxLength(entry.isString() ? 256 : 32);
             box.setValue(String.valueOf(entry.value().get()));
             box.setResponder(text -> {
                 Object parsed = entry.parse(text);

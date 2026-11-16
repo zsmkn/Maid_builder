@@ -1,6 +1,7 @@
 package com.maidbuilder.common.territory;
 
 import com.github.tartaricacid.touhoulittlemaid.api.event.MaidTickEvent;
+import com.github.tartaricacid.touhoulittlemaid.entity.favorability.Type;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 import com.maidbuilder.MaidBuilder;
 import com.maidbuilder.MaidBuilderConfig;
@@ -28,7 +29,8 @@ import java.util.List;
 
 /**
  * Level bonuses: no hostile spawns, maid regeneration (whole territory), faster crops in
- * greenhouses and shorter breeding cooldowns in ranches (inside working buildings of that kind).
+ * greenhouses and shorter breeding cooldowns in ranches (inside working buildings of that kind);
+ * also the maid side of the service buildings: healing from a canteen, favorability from a shrine.
  * Each can be switched off in the server config. Territory lookups use the chunk index, so the
  * frequent spawn and crop events stay cheap.
  */
@@ -84,14 +86,39 @@ public final class TerritoryBonuses {
 
     // ---- maid regeneration ----
 
+    /** Half a heart per interval from the maid_regen bonus, and as much again from a working canteen. */
     @SubscribeEvent
     public static void onMaidTick(MaidTickEvent event) {
         EntityMaid maid = event.getMaid();
-        if (!(maid.level() instanceof ServerLevel level) || !MaidBuilderConfig.BONUS_MAID_REGEN.get()) return;
+        if (!(maid.level() instanceof ServerLevel level)) return;
+        if ((maid.tickCount + maid.getId()) % SHRINE_INTERVAL == 0) shrine(level, maid);
         if ((maid.tickCount + maid.getId()) % MaidBuilderConfig.MAID_REGEN_INTERVAL.get() != 0) return;
         if (!maid.isAlive() || maid.getHealth() >= maid.getMaxHealth()) return;
-        Territory t = withBonus(level.getServer(), level.dimension(), maid.blockPosition(), MAID_REGEN);
-        if (t != null && t.owner().equals(maid.getOwnerUUID())) maid.heal(1f);
+        Territory t = ownTerritory(level, maid);
+        if (t == null) return;
+        float heal = 0;
+        if (MaidBuilderConfig.BONUS_MAID_REGEN.get() && t.hasBonus(MAID_REGEN)) heal++;
+        if (MaidBuilderConfig.CANTEEN_REGEN.get() && ServiceBuildings.hasWorking(t, TemplateDef.BONUS_CANTEEN)) heal++;
+        if (heal > 0) maid.heal(heal);
+    }
+
+    /** The territory the maid stands in, if her owner owns it. */
+    @Nullable
+    private static Territory ownTerritory(ServerLevel level, EntityMaid maid) {
+        Territory t = TerritoryManager.data(level.getServer()).at(level.dimension(), maid.blockPosition());
+        return t != null && t.owner().equals(maid.getOwnerUUID()) ? t : null;
+    }
+
+    // ---- shrine favorability ----
+
+    private static final int SHRINE_INTERVAL = 200;
+    /** TLM favorability gained at a shrine: as much as sleeping, at most once a day (TLM keeps the cooldown per maid). */
+    public static final Type SHRINE_PRAYER = new Type("MaidBuilderShrine", 2, 24000);
+
+    private static void shrine(ServerLevel level, EntityMaid maid) {
+        if (!MaidBuilderConfig.SHRINE_FAVORABILITY.get() || !maid.isAlive()) return;
+        Territory t = ownTerritory(level, maid);
+        if (t != null && ServiceBuildings.hasWorking(t, TemplateDef.BONUS_SHRINE)) maid.getFavorabilityManager().apply(SHRINE_PRAYER);
     }
 
     // ---- greenhouse crops ----

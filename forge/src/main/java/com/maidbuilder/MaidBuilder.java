@@ -41,6 +41,7 @@ public final class MaidBuilder {
         MinecraftForge.EVENT_BUS.addListener((AddReloadListenerEvent e) -> {
             e.addListener(new TerritoryLevels());
             e.addListener(new TemplateRegistry());
+            e.addListener(new com.maidbuilder.common.territory.ShopCatalog());
         });
 
         // Forge 1.20.1 has no client-only @Mod entry point: the client part is set up from here.

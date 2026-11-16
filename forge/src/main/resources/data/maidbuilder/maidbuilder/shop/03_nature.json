@@ -1,0 +1,27 @@
+{
+  "category": "nature",
+  "required_level": 2,
+  "price": 2,
+  "count": 8,
+  "daily_limit": 64,
+  "items": [
+    "#minecraft:small_flowers",
+    "#minecraft:saplings",
+    "#minecraft:leaves",
+    "minecraft:grass_block",
+    "minecraft:moss_block",
+    "minecraft:moss_carpet",
+    "minecraft:podzol",
+    "minecraft:coarse_dirt",
+    "minecraft:rooted_dirt",
+    "minecraft:sand",
+    "minecraft:red_sand",
+    "minecraft:gravel",
+    "minecraft:clay",
+    "minecraft:dirt_path",
+    "minecraft:grass",
+    "minecraft:fern",
+    "minecraft:vine",
+    "minecraft:lily_pad"
+  ]
+}

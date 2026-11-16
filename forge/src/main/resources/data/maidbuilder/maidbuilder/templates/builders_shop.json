@@ -1,0 +1,13 @@
+{
+  "structure": "maidbuilder:builders_shop",
+  "category": "service",
+  "required_level": 2,
+  "prosperity": 15,
+  "bonus": "shop",
+  "icon": "minecraft:emerald",
+  "order": 5,
+  "workplace": {
+    "task": "touhou_little_maid:idle",
+    "max_maids": 1
+  }
+}

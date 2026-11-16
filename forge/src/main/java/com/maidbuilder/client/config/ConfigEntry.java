@@ -42,9 +42,15 @@ record ConfigEntry(ForgeConfigSpec spec, ForgeConfigSpec.ConfigValue<?> value) {
         return value instanceof ForgeConfigSpec.EnumValue<?>;
     }
 
-    /** Parses and validates text typed for a number setting; null if it is not allowed. */
+    /** A free text setting (an item id such as {@code travelCostItem}). */
+    boolean isString() {
+        return value.getDefault() instanceof String;
+    }
+
+    /** Parses and validates text typed for a number or text setting; null if it is not allowed. */
     @Nullable
     Object parse(String text) {
+        if (isString()) return valueSpec().test(text.trim()) ? text.trim() : null;
         try {
             Object parsed = value instanceof ForgeConfigSpec.DoubleValue ? (Object) Double.parseDouble(text.trim())
                     : value instanceof ForgeConfigSpec.LongValue ? (Object) Long.parseLong(text.trim())

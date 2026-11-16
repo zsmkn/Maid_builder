@@ -1,0 +1,9 @@
+{
+  "structure": "maidbuilder:canteen",
+  "category": "service",
+  "required_level": 2,
+  "prosperity": 15,
+  "bonus": "canteen",
+  "icon": "minecraft:smoker",
+  "order": 0
+}

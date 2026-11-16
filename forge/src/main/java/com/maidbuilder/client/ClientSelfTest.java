@@ -29,7 +29,7 @@ import java.util.List;
  * once in a world it shows a ghost preview in front of the player, saves a screenshot to
  * {@code screenshots/maidbuilder_selftest.png}, then opens the material list for it, saves
  * {@code screenshots/maidbuilder_selftest_materials.png}, then the settings screens
- * ({@code maidbuilder_selftest_config0..3.png}; 4..6: territory, bonuses, clearing), the preview after raising the ghost opacity
+ * ({@code maidbuilder_selftest_config0..3.png}; 4..6: territory, bonuses, clearing; 7..8: services), the preview after raising the ghost opacity
  * ({@code maidbuilder_selftest_opacity.png}), a Blueprint Quill selecting a hut
  * ({@code maidbuilder_selftest_quill.png}), a preview that clears the schematic's air
  * ({@code maidbuilder_selftest_clear.png}: orange boxes on the dirt inside and just outside the
@@ -145,8 +145,20 @@ final class ClientSelfTest {
             }
         }
         if (ticks == 304) shot(mc, "maidbuilder_selftest_config6.png");
-        if (ticks == 306) mc.setScreen(null);
-        if (ticks >= 310 && TerritorySelfTest.tick(mc, ticks - 310)) mc.stop();
+        // 1.2.0: the territory page's nested services page, top (config7) and scrolled to the end (config8)
+        if (ticks == 306) mc.setScreen(new ConfigOverviewScreen(null));
+        if (ticks == 308) openSection(mc, "server");
+        if (ticks == 310) pressOrWarn(mc, "maidbuilder.configuration.territory");
+        if (ticks == 314) pressOrWarn(mc, "maidbuilder.configuration.services");
+        if (ticks == 320) shot(mc, "maidbuilder_selftest_config7.png");
+        if (ticks == 322 && mc.screen != null) {
+            for (GuiEventListener child : mc.screen.children()) {
+                if (child instanceof net.minecraft.client.gui.components.AbstractSelectionList<?> list) list.setScrollAmount(list.getMaxScroll());
+            }
+        }
+        if (ticks == 326) shot(mc, "maidbuilder_selftest_config8.png");
+        if (ticks == 328) mc.setScreen(null);
+        if (ticks >= 332 && TerritorySelfTest.tick(mc, ticks - 332)) mc.stop();
         return true;
     }
 

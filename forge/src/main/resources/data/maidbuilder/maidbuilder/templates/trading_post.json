@@ -1,0 +1,9 @@
+{
+  "structure": "maidbuilder:trading_post",
+  "category": "service",
+  "required_level": 3,
+  "prosperity": 25,
+  "bonus": "trading_post",
+  "icon": "minecraft:cartography_table",
+  "order": 2
+}

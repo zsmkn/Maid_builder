@@ -18,7 +18,8 @@ import java.util.Optional;
  * @param category      production / storage / housing / decoration (free text; level conditions refer to it)
  * @param group         buildings of the same kind share a group (small and large greenhouse: "greenhouse"); defaults to the id path
  * @param requiredLevel territory level that unlocks the template
- * @param bonus         range bonus inside the building: "greenhouse", "ranch" or "" for none
+ * @param bonus         what the building does: "greenhouse", "ranch" (range bonuses inside it), "trading_post",
+ *                      "village_hall", "watchtower", "shrine", "canteen", "shop" (services, see {@link ServiceBuildings}) or "" for none
  * @param storage       its containers are a warehouse for products (see {@link Workplace})
  * @param icon          item shown in the catalog
  * @param order         sort order within a category
@@ -28,6 +29,12 @@ public record TemplateDef(ResourceLocation id, ResourceLocation structure, Strin
                           ResourceLocation icon, int order) {
     public static final String BONUS_GREENHOUSE = "greenhouse";
     public static final String BONUS_RANCH = "ranch";
+    public static final String BONUS_TRADING_POST = "trading_post";
+    public static final String BONUS_VILLAGE_HALL = "village_hall";
+    public static final String BONUS_WATCHTOWER = "watchtower";
+    public static final String BONUS_SHRINE = "shrine";
+    public static final String BONUS_CANTEEN = "canteen";
+    public static final String BONUS_SHOP = "shop";
 
     /**
      * A maid assigned to the building works there with this TLM task.
