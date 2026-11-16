@@ -50,6 +50,30 @@ public class TemplateGenerator {
         templates.put("watchtower", watchtower());
         templates.put("shrine", shrine());
         templates.put("builders_shop", buildersShop());
+        // Fine versions (building level 2): same size and layout, finer materials and trim.
+        Map<String, Grid> fine = new java.util.LinkedHashMap<>();
+        fine.put("warehouse", fine(warehouse(), g -> houseTrim(g, 0, 1, 7, 7, 3)));
+        fine.put("dormitory", fine(dormitory(), g -> houseTrim(g, 1, 1, 9, 7, 3)));
+        fine.put("canteen", fine(canteen(), g -> houseTrim(g, 1, 1, 9, 7, 3)));
+        fine.put("village_hall", fine(villageHall(), g -> houseTrim(g, 1, 1, 11, 9, 3)));
+        fine.put("small_greenhouse", fine(greenhouse(1), g -> greenhouseTrim(g, 1)));
+        fine.put("large_greenhouse", fine(greenhouse(2), g -> greenhouseTrim(g, 2)));
+        fine.put("ranch", fine(ranch(1), g -> {
+        }));
+        fine.put("large_ranch", fine(ranch(2), g -> {
+        }));
+        fine.put("sugar_cane_farm", fine(sugarCaneFarm(), g -> {
+        }));
+        fine.put("lumberyard", fine(lumberyard(), g -> g.replace(Map.of("oak_planks", "spruce_planks"))));
+        fine.put("apiary", fine(apiary(), g -> {
+        }));
+        for (Map.Entry<String, Grid> e : fine.entrySet()) {
+            Grid basic = templates.get(e.getKey());
+            if (!basic.size().equals(e.getValue().size())) {
+                throw new IllegalStateException(e.getKey() + "_fine is " + e.getValue().size() + ", not " + basic.size());
+            }
+            templates.put(e.getKey() + "_fine", e.getValue());
+        }
         for (Map.Entry<String, Grid> e : templates.entrySet()) {
             Schematic s = e.getValue().toSchematic(e.getKey());
             try (OutputStream os = Files.newOutputStream(out.resolve(e.getKey() + ".litematic"))) {
@@ -501,6 +525,63 @@ public class TemplateGenerator {
         return g;
     }
 
+    // ---------------------------------------------------------------- fine versions
+
+    /** Material swaps from a basic template to its fine version. */
+    static final Map<String, String> FINE = Map.ofEntries(
+            Map.entry("cobblestone", "stone_bricks"),
+            Map.entry("cobblestone_slab", "stone_brick_slab"),
+            Map.entry("cobblestone_wall", "stone_brick_wall"),
+            Map.entry("oak_log", "spruce_log"),
+            Map.entry("oak_stairs", "dark_oak_stairs"),
+            Map.entry("oak_slab", "dark_oak_slab"),
+            Map.entry("oak_door", "spruce_door"),
+            Map.entry("oak_fence", "spruce_fence"),
+            Map.entry("oak_fence_gate", "spruce_fence_gate"),
+            Map.entry("torch", "lantern"));
+
+    /** The fine version of a basic template: swapped materials, then the template's own trim. */
+    static Grid fine(Grid basic, java.util.function.Consumer<Grid> trim) {
+        basic.replace(FINE);
+        trim.accept(basic);
+        return basic;
+    }
+
+    private static final String[] POTS = {"potted_poppy", "potted_dandelion", "potted_azure_bluet", "potted_oxeye_daisy"};
+
+    /**
+     * Trim of a {@link #house}: a stripped spruce beam round the top of the walls, a lantern post on
+     * each side of the door step and potted flowers along the front.
+     */
+    static void houseTrim(Grid g, int ox, int oz, int w, int d, int top) {
+        for (int x = 0; x < w; x++) {
+            for (int z = 0; z < d; z++) {
+                boolean edgeX = x == 0 || x == w - 1, edgeZ = z == 0 || z == d - 1;
+                if ((edgeX || edgeZ) && !(edgeX && edgeZ)) g.set(ox + x, top, oz + z, "stripped_spruce_log[axis=" + (edgeZ ? "x" : "z") + "]");
+            }
+        }
+        int doorX = ox + w / 2;
+        for (int x : new int[]{doorX - 1, doorX + 1}) {
+            g.set(x, 0, oz - 1, "spruce_fence");
+            g.set(x, 1, oz - 1, "lantern");
+        }
+        int pot = 0;
+        for (int x = ox; x < ox + w; x++) {
+            if (Math.abs(x - doorX) <= 1 || (x - ox) % 2 != 0) continue;
+            g.set(x, 0, oz - 1, POTS[pot++ % POTS.length]);
+        }
+    }
+
+    /** Trim of a {@link #greenhouse}: lanterns at the door and one hanging over each water hole. */
+    static void greenhouseTrim(Grid g, int fields) {
+        int iw = fields * 9 + (fields - 1), w = iw + 2, oz = 1, top = 3, doorX = w / 2;
+        for (int x : new int[]{doorX - 1, doorX + 1}) {
+            g.set(x, 0, oz - 1, "spruce_fence");
+            g.set(x, 1, oz - 1, "lantern");
+        }
+        for (int f = 0; f < fields; f++) g.set(1 + f * 10 + 4, top, oz + 5, "lantern[hanging=true]");
+    }
+
     // ---------------------------------------------------------------- building blocks
 
     /**
@@ -608,6 +689,14 @@ public class TemplateGenerator {
             for (int x = Math.min(x1, x2); x <= Math.max(x1, x2); x++)
                 for (int y = Math.min(y1, y2); y <= Math.max(y1, y2); y++)
                     for (int z = Math.min(z1, z2); z <= Math.max(z1, z2); z++) set(x, y, z, state);
+        }
+
+        /** Swaps blocks by path (without namespace), keeping their properties. */
+        void replace(Map<String, String> paths) {
+            blocks.replaceAll((p, s) -> {
+                String to = paths.get(s.path());
+                return to == null ? s : new BlockStateData("minecraft:" + to, s.properties());
+            });
         }
 
         BlockStateData get(IntPos p) {

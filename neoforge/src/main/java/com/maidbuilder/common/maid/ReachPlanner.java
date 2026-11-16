@@ -396,9 +396,14 @@ final class ReachPlanner {
 
     // ---- where the maid is ----
 
+    /** Higher than a jump from the ground takes her (about 1.25 blocks). */
+    private static final double ABOVE_JUMP = 1.3;
+
     /**
      * The tracked column the maid is standing on or climbing in, if any. Standing in its bottom
-     * block on the ground does not count: that is where she enters and leaves it.
+     * block on the ground does not count: that is where she enters and leaves it. Nor does a jump
+     * from there (e.g. onto a chair next to it on her way out): only standing on a scaffold, or
+     * being higher than a jump.
      */
     @Nullable
     static List<BlockPos> columnAt(EntityMaid maid, BuildJob job) {
@@ -406,7 +411,9 @@ final class ReachPlanner {
         BlockPos feet = maid.blockPosition();
         if (!job.isScaffold(feet) && !job.isScaffold(feet.below())) return null;
         List<BlockPos> column = job.scaffoldColumns().get(BuildJob.columnKey(feet));
-        return column != null && maid.getY() > column.getFirst().getY() + 0.5 ? column : null;
+        if (column == null) return null;
+        double up = maid.getY() - column.getFirst().getY();
+        return up > ABOVE_JUMP || maid.onGround() && up > 0.5 ? column : null;
     }
 
     /** Whether the maid's box sits inside the column's x/z cell (she is climbing or standing on it). */
@@ -454,16 +461,17 @@ final class ReachPlanner {
                 BlockPos beside = at.offset(side[0], 0, side[1]);
                 if (!level.isLoaded(beside)) continue;
                 BlockPos next = null;
-                if (headroom && canWalkAt(level, maid, beside.above())) {
+                if (headroom && canWalkAt(level, beside.above())) {
                     next = beside.above();
                 } else if (walkable(level, beside) && walkable(level, beside.above())) {
                     for (int drop = 0; drop <= MAX_DROP; drop++) {
                         BlockPos feet = beside.below(drop);
-                        if (canWalkAt(level, maid, feet)) {
+                        if (canWalkAt(level, feet)) {
                             next = feet;
                             break;
                         }
-                        if (!walkable(level, feet.below())) break;
+                        // a scaffold stops the fall (she would land on top of it, which the search does not use)
+                        if (!passable(level, feet.below())) break;
                     }
                 }
                 if (next != null && seen.add(next)) open.add(new Node(next, node.length() + 1, node));
@@ -472,14 +480,31 @@ final class ReachPlanner {
         return null;
     }
 
-    /** Like {@link #canStandAt}, but closed wooden doors count as open: maids open them. */
-    private static boolean canWalkAt(Level level, EntityMaid maid, BlockPos feet) {
-        BlockPos below = feet.below();
-        return level.getBlockState(below).entityCanStandOn(level, below, maid)
-                && walkable(level, feet) && walkable(level, feet.above());
+    /** Like {@link #canStandAt}, but closed wooden doors count as open (maids open them) and she walks under or through scaffolding. */
+    private static boolean canWalkAt(Level level, BlockPos feet) {
+        return walksOn(level, feet.below()) && walkable(level, feet) && walkable(level, feet.above());
     }
 
+    /**
+     * A floor for the ground search: a block whose top is between half and full height, so stairs
+     * and slabs (a door step) count. Not scaffolding (the search keeps off the job's columns), nor
+     * fences and walls, which a maid cannot step onto.
+     */
+    private static boolean walksOn(Level level, BlockPos pos) {
+        BlockState state = level.getBlockState(pos);
+        if (state.is(Blocks.SCAFFOLDING)) return false;
+        net.minecraft.world.phys.shapes.VoxelShape shape = state.getCollisionShape(level, pos);
+        if (shape.isEmpty()) return false;
+        double top = shape.max(Direction.Axis.Y);
+        return top >= 0.5 && top <= 1.0;
+    }
+
+    /**
+     * A cell she can walk through: empty, a wooden door, or scaffolding, which has no collision
+     * from below or inside (asked without an entity, the game answers as if standing on top).
+     */
     private static boolean walkable(Level level, BlockPos pos) {
-        return passable(level, pos) || net.minecraft.world.level.block.DoorBlock.isWoodenDoor(level.getBlockState(pos));
+        BlockState state = level.getBlockState(pos);
+        return passable(level, pos) || net.minecraft.world.level.block.DoorBlock.isWoodenDoor(state) || state.is(Blocks.SCAFFOLDING);
     }
 }

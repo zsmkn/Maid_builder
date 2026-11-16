@@ -58,6 +58,9 @@ public class BuilderFetchMaterialTask extends Behavior<EntityMaid> {
     private static final double TEAMMATE_RANGE = 32;
     /** Smallest amount worth walking to a teammate for. */
     private static final int MIN_SHARE = 4;
+    /** Failed trips in a row after which she walks somewhere else at random before trying again. */
+    private static final int STUCK_TRIPS = 2;
+    private static final int WANDER_RANGE = 8;
 
     private final BuilderSession session;
     private final float speed;
@@ -70,6 +73,10 @@ public class BuilderFetchMaterialTask extends Behavior<EntityMaid> {
     private Map<Item, Integer> wanted;
     /** The way round to the container when the game's path finder found none. */
     private final RouteFollower route = new RouteFollower();
+    /** Trips in a row that ended without reaching the container or teammate. */
+    private int failedTrips;
+    /** Set when she was sent off to wander: the walk target is hers to keep when the task stops. */
+    private boolean wandering;
 
     public BuilderFetchMaterialTask(BuilderSession session, float speed) {
         super(ImmutableMap.of(
@@ -205,6 +212,7 @@ public class BuilderFetchMaterialTask extends Behavior<EntityMaid> {
         if (target == null) return;
         if (maid.distanceToSqr(target) <= TAKE_DISTANCE * TAKE_DISTANCE) {
             take(level, maid);
+            failedTrips = 0;
             container = null;
             teammate = null;
         } else if (container != null && !route.planned() && stopsShort(maid, target)) {
@@ -229,7 +237,24 @@ public class BuilderFetchMaterialTask extends Behavior<EntityMaid> {
             cooldown = NOTHING_FOUND_INTERVAL;
             container = null;
             teammate = null;
+            if (++failedTrips >= STUCK_TRIPS) unstick(level, maid);
         }
+    }
+
+    /**
+     * Stuck where she stands (the same trip keeps failing): lets go of the block she meant to build
+     * and walks to a random spot nearby, so the next try starts from somewhere else.
+     */
+    private void unstick(ServerLevel level, EntityMaid maid) {
+        failedTrips = 0;
+        UUID jobId = BuilderMaidData.jobOf(maid);
+        if (jobId != null) BuildJobManager.loaded(level.getServer(), jobId).ifPresent(job -> job.release(maid.getUUID()));
+        session.scaffoldStep = -1;
+        Vec3 spot = net.minecraft.world.entity.ai.util.LandRandomPos.getPos(maid, WANDER_RANGE, 3);
+        MaidBuilder.LOGGER.debug("Maid {} seems stuck at {}: wandering to {}", maid.getUUID(), maid.blockPosition(), spot);
+        if (spot == null) return;
+        maid.getBrain().setMemory(MemoryModuleType.WALK_TARGET, new WalkTarget(spot, speed, 0));
+        wandering = true;
     }
 
     /**
@@ -266,6 +291,7 @@ public class BuilderFetchMaterialTask extends Behavior<EntityMaid> {
         teammate = null;
         wanted = null;
         route.reset();
-        maid.getBrain().eraseMemory(MemoryModuleType.WALK_TARGET);
+        if (!wandering) maid.getBrain().eraseMemory(MemoryModuleType.WALK_TARGET);
+        wandering = false;
     }
 }
