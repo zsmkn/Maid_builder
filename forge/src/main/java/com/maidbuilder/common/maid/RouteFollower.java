@@ -18,10 +18,21 @@ final class RouteFollower {
     /** Steps handed to the game's path finder at a time (well inside its range). */
     private static final int STEP = 20;
 
+    /**
+     * How long a search that found no way is taken for granted. A failed search is the costly kind
+     * (it looks at every spot she can walk to), and a maid who is stuck asks again every few seconds.
+     */
+    private static final long NO_WAY_TICKS = 20 * 30;
+
     @Nullable
     private List<BlockPos> route;
     private int index;
     private boolean planned;
+    /** The goal the last failed search was for, the spots it showed to have no way there, and until when that holds. */
+    @Nullable
+    private BlockPos noWayGoal;
+    private final java.util.Set<BlockPos> noWayFrom = new java.util.HashSet<>();
+    private long noWayUntil;
 
     void reset() {
         route = null;
@@ -35,8 +46,20 @@ final class RouteFollower {
     /** Plans the way to within {@code within} blocks of {@code goal} and starts her along it; false if there is none. */
     boolean plan(ServerLevel level, EntityMaid maid, BlockPos goal, double within, float speed) {
         planned = true;
-        route = ReachPlanner.planWalk(level, maid, goal, within);
-        if (route == null || route.isEmpty()) {
+        long now = level.getGameTime();
+        if (goal.equals(noWayGoal) && now < noWayUntil && noWayFrom.contains(maid.blockPosition())) {
+            route = null;
+            return false;
+        }
+        noWayFrom.clear();
+        noWayGoal = null;
+        route = ReachPlanner.planWalk(level, maid, goal, within, noWayFrom);
+        if (route == null) {
+            noWayGoal = goal.immutable();
+            noWayUntil = now + NO_WAY_TICKS;
+            return false;
+        }
+        if (route.isEmpty()) {
             route = null;
             return false;
         }

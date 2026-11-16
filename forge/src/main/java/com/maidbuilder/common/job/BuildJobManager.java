@@ -56,6 +56,15 @@ public final class BuildJobManager {
         return false;
     }
 
+    /** Reads the schematics of the jobs still running ahead of time, off the server thread. */
+    public static void preload(MinecraftServer server) {
+        java.util.List<String> hashes = new java.util.ArrayList<>();
+        for (BuildJob job : data(server).all()) {
+            if (!job.isLoaded() && job.needsMaids()) hashes.add(job.schematicHash());
+        }
+        SchematicStore.preload(server, hashes);
+    }
+
     public static void clearRuntimeCaches() {
         SchematicStore.clearCache();
     }

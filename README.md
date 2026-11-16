@@ -13,7 +13,7 @@ An add-on for Touhou Little Maid: maids build structures from `.litematic` / `.n
 
 > 不依賴 Litematica / Forgematica；只讀取它們的檔案格式。
 
-> **1.2.0（Minecraft 1.20.1／Forge）**：1.21.1 NeoForge 版 1.2.0 的移植，新增服務建築（食堂、村民集會所、驛站、瞭望塔、神社）、建材行、女僕繞路取料、「需玩家處理」詳情；功能、指令、按鍵、設定項、存檔欄位與資料包格式都與 1.21.1 版相同（移植紀錄見 [plan.md](plan.md)）。建議在大型存檔中使用前先備份世界。
+> **1.3.0（Minecraft 1.20.1／Forge）**：1.21.1 NeoForge 版 1.3.0 的移植，介面改版（領地畫面、模板目錄、材料清單、魔杖與建造模式提示改成深色藍圖風格）、鷹架上施工加快、依使用順序取料、不再提早在半空中放方塊，以及數項女僕卡住與保護相容的修正；功能、指令、按鍵、設定項、存檔欄位與資料包格式都與 1.21.1 版相同（移植紀錄見 [plan.md](plan.md)）。建議在大型存檔中使用前先備份世界。
 
 ### 與 1.21.1 版的差異
 
@@ -82,7 +82,7 @@ An add-on for Touhou Little Maid: maids build structures from `.litematic` / `.n
    - **建築**：已登記的建築與完整度；少於 80% 會「需修復」並停止計算，按「修復」排入修復工作；✕（按兩次）取消登記。
    - **女僕**：領地內的女僕、背包狀態；「建築師」＝把她切換為建築師任務（沒有自己工作的建築師會依序建造領地佇列）；「工作地點…」＝從領地內所有可工作的建築中選一個（溫室、牧場等，使用 TLM 的對應任務）；「存放倉庫」＝把產物送進倉庫。
    - 自己在建築旁把女僕設成該建築的工作（家模式工作點在建築內、任務相同）也會自動登記為在該建築工作；改成別的任務或把家搬走就會取消。
-3. **建造模式**：在自己的領地內按 `Caps Lock`（可在控制設定中修改；某些輸入法會用 Caps Lock 切換中英文，衝突時請改鍵）或在建設頁按「建造模式」→ 選模板。模板會跟著準星移動（底部貼在看著的地面上），`R` 旋轉、`M` 鏡像、`PgUp`/`PgDn` 調整高度、`B` 材料清單，**右鍵**排入建造佇列，左鍵離開。超出領地、與其他建築重疊、蓋住旗幟或等級不夠時預覽變紅，不能放置。
+3. **建造模式**：在自己的領地內按 `Caps Lock`（可在控制設定中修改；某些輸入法會用 Caps Lock 切換中英文，衝突時請改鍵）或在建設頁按「建造模式」→ 選模板（模板目錄左邊選分類，點一下模板看尺寸、方塊數與說明，點兩下或按右下角的按鈕開始放置）。模板會跟著準星移動（底部貼在看著的地面上），`R` 旋轉、`M` 鏡像、`PgUp`/`PgDn` 調整高度、`B` 材料清單，**右鍵**排入建造佇列，左鍵離開。超出領地、與其他建築重疊、蓋住旗幟或等級不夠時預覽變紅，不能放置。
    - 自己的藍圖：在領地內用藍圖魔杖放置的工作也會加入領地佇列（使用領地材料箱），但不登記為建築、不計繁榮度。
 4. **繁榮度**＝運作中的模板建築＋居民女僕（在領地內開啟家模式的女僕，每級有計入上限）。升級條件（預設）：
 
@@ -144,10 +144,10 @@ An add-on for Touhou Little Maid: maids build structures from `.litematic` / `.n
 ```bash
 ./gradlew build                          # 編譯 + core 單元測試，產出 forge/build/libs/maidbuilder-release_<版本>_forge1.20.1.jar（reobf）
 ./gradlew :core:test                     # 只跑 core 單元測試
-./gradlew :forge:runGameTestServer       # 遊戲內自動測試（66 個，含效能基準，log 中搜尋 BENCH；在 forge/runs/gametest/ 用 run/networld 的複本，每次先清掉上次留下的工作、領地與實體）
+./gradlew :forge:runGameTestServer       # 遊戲內自動測試（71 個，含效能基準，log 中搜尋 BENCH；在 forge/runs/gametest/ 用 run/networld 的複本，每次先清掉上次留下的工作、領地與實體）
 ./gradlew :forge:runClient               # 開發用客戶端（遊戲目錄：forge/run）
 ./gradlew :forge:runClientSelfTest       # 渲染冒煙測試：需 forge/run/saves/selftest 世界，輸出 forge/run/screenshots/maidbuilder_selftest*.png（含拆除橘框、領地介面、建造模式）
-./gradlew :forge:runTemplateShowcase     # 內建模板外觀：在 selftest 世界貼上 11 個模板，輸出 maidbuilder_showcase_*.png 後清除
+./gradlew :forge:runTemplateShowcase     # 內建模板外觀：在 selftest 世界貼上 17 個模板，輸出 maidbuilder_showcase_*.png 後清除
 ./gradlew :forge:runClientShaderTest -PshaderTest=true   # 同上，加上 Oculus + Embeddium（forge/runs/shaders，光影包放 shaderpacks/）
 ./gradlew :forge:runServer               # 開發用專用伺服器（forge/run）
 ./gradlew :forge:runClientNetTest        # 連到本機專用伺服器的網路冒煙測試（上傳、工作、材料清單、擷取下載、領地與模板下載；Dev 需為 OP）

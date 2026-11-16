@@ -3,6 +3,7 @@ package com.maidbuilder.common.maid;
 import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 import com.google.common.collect.ImmutableMap;
 import com.maidbuilder.MaidBuilder;
+import com.maidbuilder.common.BlockBreaker;
 import com.maidbuilder.common.job.BuildJob;
 import com.maidbuilder.common.job.BuildJobManager;
 import net.minecraft.core.BlockPos;
@@ -150,7 +151,8 @@ public class BuilderTeardownTask extends Behavior<EntityMaid> {
         for (BlockPos pos : remove) job.removeScaffold(pos);
         for (int i = column.size() - 1; i >= 0; i--) remove.add(column.get(i));
         for (BlockPos pos : remove) {
-            if (level.getBlockState(pos).is(Blocks.SCAFFOLDING)) {
+            // one a protection mod keeps her from breaking stays up, for the owner to deal with
+            if (level.getBlockState(pos).is(Blocks.SCAFFOLDING) && BlockBreaker.mayBreak(level, pos, maid, job.owner())) {
                 level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
                 taken++;
             }

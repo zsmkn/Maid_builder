@@ -89,15 +89,21 @@ public final class MaterialContainers {
     /**
      * Moves up to the wanted amounts from {@code from} into {@code to}, limited by the space in
      * {@code to}. Decrements {@code wanted} and returns the number of items moved.
+     * <p>The items are taken in the order of {@code wanted} (for a maid's shopping list: the order she
+     * needs them in), so when there is not room for everything it is the later ones that stay behind.
      */
     public static int transfer(IItemHandler from, IItemHandler to, Map<Item, Integer> wanted) {
         int moved = 0;
-        for (int slot = 0; slot < from.getSlots() && !wanted.isEmpty(); slot++) {
-            ItemStack inSlot = from.getStackInSlot(slot);
-            // capture the item now: the slot's stack object may be emptied by the extraction below
-            Item item = inSlot.getItem();
-            Integer need = inSlot.isEmpty() ? null : wanted.get(item);
-            if (need == null) continue;
+        for (Item item : List.copyOf(wanted.keySet())) moved += transfer(from, to, wanted, item);
+        return moved;
+    }
+
+    private static int transfer(IItemHandler from, IItemHandler to, Map<Item, Integer> wanted, Item item) {
+        int moved = 0;
+        for (int slot = 0; slot < from.getSlots(); slot++) {
+            Integer need = wanted.get(item);
+            if (need == null) break;
+            if (!from.getStackInSlot(slot).is(item)) continue;
             ItemStack simulated = from.extractItem(slot, need, true);
             if (simulated.isEmpty()) continue;
             ItemStack leftover = ItemHandlerHelper.insertItemStacked(to, simulated.copy(), true);

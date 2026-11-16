@@ -31,8 +31,6 @@ import java.util.Map;
 final class ReachPlanner {
     private static final int STAND_PATH_TRIES = 4;
     private static final int COLUMN_PATH_TRIES = 3;
-    /** Columns are put up at most this far (horizontally) from the block they are for. */
-    private static final int COLUMN_OFFSET = 3;
     /** Keep a little slack so standing slightly off-centre still reaches. */
     private static final double REACH_SLACK = 0.3;
 
@@ -53,11 +51,18 @@ final class ReachPlanner {
         return new Vec3(feet.getX() + 0.5, feet.getY() + eyeHeight, feet.getZ() + 0.5).distanceToSqr(Vec3.atCenterOf(target)) <= reach * reach;
     }
 
-    /** Nothing to bump into, and nothing that hurts. */
+    /** A floor covering no higher than this (carpet, a few layers of snow) is walked over like bare floor. */
+    private static final double LOW_COVER = 0.25;
+
+    /**
+     * Nothing to bump into, and nothing that hurts. A carpet or thin snow counts as nothing: she
+     * stands in that cell, on the block under it.
+     */
     static boolean passable(Level level, BlockPos pos) {
         BlockState state = level.getBlockState(pos);
-        return state.getCollisionShape(level, pos).isEmpty()
-                && !state.is(BlockTags.FIRE) && !state.getFluidState().is(FluidTags.LAVA);
+        if (state.is(BlockTags.FIRE) || state.getFluidState().is(FluidTags.LAVA)) return false;
+        net.minecraft.world.phys.shapes.VoxelShape shape = state.getCollisionShape(level, pos);
+        return shape.isEmpty() || shape.max(Direction.Axis.Y) <= LOW_COVER;
     }
 
     /** A cell a scaffold may go into: empty or replaceable (grass, snow layer...) and not dangerous. */
@@ -169,46 +174,104 @@ final class ReachPlanner {
         }
     }
 
-    /** Scaffolding to climb to reach {@code target}, reachable on foot inside the work area; null if none fits. */
+    /** Far columns (see {@link #planColumn}) checked per search for a way along the top to the target. */
+    private static final int FAR_COLUMN_TRIES = 3;
+    /** Pending blocks looked at when weighing where a column serves most of them. */
+    private static final int COVER_SCAN = 512;
+
+    /**
+     * Scaffolding to climb to reach {@code target}, reachable on foot inside the work area; null if none fits.
+     * <p>The column goes where it serves the most blocks still to be built at that height: scaffolding
+     * hangs {@link #MAX_HANG} blocks to either side of it, so a column in the middle of a wall covers
+     * twice what one at its end does, and she comes down half as often. It may therefore stand out of
+     * reach of the target itself ({@code scaffolding} then has to cover the walk over to it); she
+     * goes there along the top first (see {@link BuilderScaffoldTask}).
+     *
+     * @param scaffolding how much scaffolding she carries
+     */
     @Nullable
-    static Column planColumn(ServerLevel level, EntityMaid maid, BuildJob job, BlockPos target) {
+    static Column planColumn(ServerLevel level, EntityMaid maid, BuildJob job, BlockPos target, int scaffolding) {
         double margin = MaidBuilderConfig.WORK_AREA_MARGIN.get();
         double eye = maid.getEyeHeight();
         int maxHeight = MaidBuilderConfig.MAX_SCAFFOLD_HEIGHT.get();
         int r = (int) Math.ceil(reach());
-        List<Column> candidates = new ArrayList<>();
-        for (int dx = -COLUMN_OFFSET; dx <= COLUMN_OFFSET; dx++) {
-            for (int dz = -COLUMN_OFFSET; dz <= COLUMN_OFFSET; dz++) {
+        // Stand with her eyes level with the target if possible: the blocks above it (usually
+        // next in the build order) are then in reach from the same spot. Lower if that fails.
+        int eyeLevel = (int) Math.floor(target.getY() + 1.0 - eye);
+        List<BlockPos> ahead = pendingAround(level, job, target);
+        record Candidate(Column column, boolean near, int score) {
+        }
+        List<Candidate> candidates = new ArrayList<>();
+        for (int dx = -MAX_HANG; dx <= MAX_HANG; dx++) {
+            for (int dz = -MAX_HANG; dz <= MAX_HANG; dz++) {
                 if (dx == 0 && dz == 0) continue;
                 BlockPos column = target.offset(dx, 0, dz);
                 if (!job.inWorkArea(column, margin) || !level.isLoaded(column)) continue;
                 if (!job.columnFreeFor(BuildJob.columnKey(column), maid.getUUID())) continue; // a teammate is on it
-                // Stand with her eyes level with the target if possible: the blocks above it (usually
-                // next in the build order) are then in reach from the same spot. Lower if that fails.
-                int eyeLevel = (int) Math.floor(target.getY() + 1.0 - eye);
+                Column found = null;
+                boolean near = false;
                 for (int standY = eyeLevel; standY >= target.getY() - r - (int) Math.ceil(eye); standY--) {
                     BlockPos stand = column.atY(standY);
                     if (!reaches(stand, eye, target)) continue;
-                    Column c = columnBelow(level, job, stand, maxHeight);
-                    if (c != null) {
-                        candidates.add(c);
+                    found = columnBelow(level, job, stand, maxHeight);
+                    if (found != null) {
+                        near = true;
                         break;
                     }
                 }
+                if (found == null && Math.abs(dx) + Math.abs(dz) <= MAX_HANG) found = columnBelow(level, job, column.atY(eyeLevel), maxHeight);
+                if (found == null || found.newBlocks() > scaffolding) continue;
+                // a new scaffold costs about what placing a block does
+                candidates.add(new Candidate(found, near, covered(ahead, found.base()) - found.newBlocks()));
             }
         }
         Vec3 from = maid.position();
-        // fewest new blocks first (reuses existing columns), then closest to the maid
-        candidates.sort(Comparator.<Column>comparingInt(Column::newBlocks)
-                .thenComparingDouble(c -> Vec3.atBottomCenterOf(c.base()).distanceToSqr(from)));
-        int tries = 0;
-        for (Column c : candidates) {
+        // most blocks served first, then closest to the maid
+        candidates.sort(Comparator.<Candidate>comparingInt(c -> -c.score())
+                .thenComparingDouble(c -> Vec3.atBottomCenterOf(c.column().base()).distanceToSqr(from)));
+        int tries = 0, farTries = 0;
+        for (Candidate candidate : candidates) {
+            Column c = candidate.column();
             if (tries >= COLUMN_PATH_TRIES) break;
+            if (!candidate.near()) {
+                // out of reach of the target: only if she can get over to it along the top
+                if (farTries++ >= FAR_COLUMN_TRIES) continue;
+                if (planShift(level, maid, job, c.stand(), target, scaffolding - c.newBlocks()) == null) continue;
+            }
             if (maid.distanceToSqr(Vec3.atBottomCenterOf(c.base())) <= 2.0) return c;
             tries++;
             if (pathTo(maid, c.base(), 1, job, margin) != null) return c;
         }
         return null;
+    }
+
+    /** The blocks still to be built around {@code target} at the height a column for it serves. */
+    private static List<BlockPos> pendingAround(ServerLevel level, BuildJob job, BlockPos target) {
+        List<BlockPos> list = new ArrayList<>();
+        int range = 2 * MAX_HANG + 2;
+        job.findNext(level.getGameTime(), i -> {
+            BlockPos pos = job.pos(i);
+            if (pos.getY() >= target.getY() - 1 && pos.getY() <= target.getY() + 2
+                    && Math.abs(pos.getX() - target.getX()) <= range && Math.abs(pos.getZ() - target.getZ()) <= range) list.add(pos);
+            return false;
+        }, COVER_SCAN);
+        return list;
+    }
+
+    /**
+     * How well a column at {@code base} serves {@code blocks}: two for each she reaches from the
+     * column itself (no more scaffolding, and still in reach when the column is raised), one for
+     * each next to where scaffolding hung from it gets to.
+     */
+    private static int covered(List<BlockPos> blocks, BlockPos base) {
+        double direct = reach() - 1;
+        int n = 0;
+        for (BlockPos pos : blocks) {
+            int dx = pos.getX() - base.getX(), dz = pos.getZ() - base.getZ();
+            if (dx * dx + dz * dz <= direct * direct) n += 2;
+            else if (Math.abs(dx) + Math.abs(dz) <= MAX_HANG + 1) n++;
+        }
+        return n;
     }
 
     /**
@@ -267,7 +330,7 @@ final class ReachPlanner {
     private static final int[][] SIDES = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
 
     /** Feet positions to walk through, in order, and how many of the cells under them need new scaffolding. */
-    record Walk(List<BlockPos> path, int newBlocks) {
+    record Walk(List<BlockPos> path, int newBlocks, BlockPos target) {
         BlockPos end() {
             return path.get(path.size() - 1);
         }
@@ -283,13 +346,25 @@ final class ReachPlanner {
      */
     @Nullable
     static Walk planShift(ServerLevel level, EntityMaid maid, BuildJob job, BlockPos stand, BlockPos target, int maxNew) {
-        Walk close = planShift(level, maid, job, stand, target, maxNew, 1);
-        return close != null ? close : planShift(level, maid, job, stand, target, maxNew, SHIFT_RADIUS * 2);
+        return planShift(level, maid, job, stand, List.of(target), maxNew);
+    }
+
+    /**
+     * The same towards whichever of {@code targets} is best to go to ({@link Walk#target} tells which):
+     * fewest new blocks first; among walks needing new scaffolding, the one whose end hangs closest to
+     * its support (so she first builds what is near the column, to either side of it, before she
+     * uses up the hang on one side or round a corner); then the shortest.
+     */
+    @Nullable
+    static Walk planShift(ServerLevel level, EntityMaid maid, BuildJob job, BlockPos stand, List<BlockPos> targets, int maxNew) {
+        if (targets.isEmpty()) return null;
+        Walk close = planShift(level, maid, job, stand, targets, maxNew, 1);
+        return close != null ? close : planShift(level, maid, job, stand, targets, maxNew, SHIFT_RADIUS * 2);
     }
 
     /** As above, ending within {@code near} blocks (horizontally, per axis) of the target. */
     @Nullable
-    private static Walk planShift(ServerLevel level, EntityMaid maid, BuildJob job, BlockPos stand, BlockPos target, int maxNew, int near) {
+    private static Walk planShift(ServerLevel level, EntityMaid maid, BuildJob job, BlockPos stand, List<BlockPos> targets, int maxNew, int near) {
         double eye = maid.getEyeHeight();
         double margin = MaidBuilderConfig.WORK_AREA_MARGIN.get();
         record Node(BlockPos pos, int newBlocks, int length, int hang, @Nullable Node from) {
@@ -299,15 +374,28 @@ final class ReachPlanner {
         java.util.Map<BlockPos, Integer> best = new java.util.HashMap<>();
         open.add(new Node(stand, 0, 0, hang(level, stand.below()), null));
         best.put(stand, 0);
+        Node goal = null;
+        BlockPos goalTarget = null;
+        long goalRank = Long.MAX_VALUE;
         while (!open.isEmpty()) {
             Node node = open.poll();
-            if (node.from() != null && reaches(node.pos(), eye, target)
-                    && Math.abs(node.pos().getX() - target.getX()) <= near && Math.abs(node.pos().getZ() - target.getZ()) <= near
-                    && !node.pos().equals(target) && !node.pos().above().equals(target) && !node.pos().below().equals(target)) {
-                List<BlockPos> path = new ArrayList<>();
-                for (Node n = node; n.from() != null; n = n.from()) path.add(n.pos());
-                java.util.Collections.reverse(path);
-                return new Walk(path, node.newBlocks());
+            // nodes come out by new blocks, then length: once a walk is found, more new blocks never win
+            if (goal != null && node.newBlocks() > goal.newBlocks()) break;
+            if (node.from() != null) {
+                for (BlockPos target : targets) {
+                    if (!reaches(node.pos(), eye, target)
+                            || Math.abs(node.pos().getX() - target.getX()) > near || Math.abs(node.pos().getZ() - target.getZ()) > near
+                            || node.pos().equals(target) || node.pos().above().equals(target) || node.pos().below().equals(target)) continue;
+                    long rank = (node.newBlocks() > 0 ? node.hang() * 100_000L : 0) + node.length();
+                    if (rank < goalRank) {
+                        goal = node;
+                        goalTarget = target;
+                        goalRank = rank;
+                    }
+                    break;
+                }
+                // without new scaffolding the first walk found is the shortest
+                if (goal != null && goal.newBlocks() == 0) break;
             }
             for (int[] side : SIDES) {
                 BlockPos next = node.pos().offset(side[0], 0, side[1]);
@@ -332,7 +420,11 @@ final class ReachPlanner {
                 open.add(new Node(next, newBlocks, node.length() + 1, hang, node));
             }
         }
-        return null;
+        if (goal == null) return null;
+        List<BlockPos> path = new ArrayList<>();
+        for (Node n = goal; n.from() != null; n = n.from()) path.add(n.pos());
+        java.util.Collections.reverse(path);
+        return new Walk(path, goal.newBlocks(), goalTarget);
     }
 
     /**
@@ -400,9 +492,14 @@ final class ReachPlanner {
 
     // ---- where the maid is ----
 
+    /** Higher than a jump from the ground takes her (about 1.25 blocks). */
+    private static final double ABOVE_JUMP = 1.3;
+
     /**
      * The tracked column the maid is standing on or climbing in, if any. Standing in its bottom
-     * block on the ground does not count: that is where she enters and leaves it.
+     * block on the ground does not count: that is where she enters and leaves it. Nor does a jump
+     * from there (e.g. onto a chair next to it on her way out): only standing on a scaffold, or
+     * being higher than a jump.
      */
     @Nullable
     static List<BlockPos> columnAt(EntityMaid maid, BuildJob job) {
@@ -410,7 +507,9 @@ final class ReachPlanner {
         BlockPos feet = maid.blockPosition();
         if (!job.isScaffold(feet) && !job.isScaffold(feet.below())) return null;
         List<BlockPos> column = job.scaffoldColumns().get(BuildJob.columnKey(feet));
-        return column != null && maid.getY() > column.get(0).getY() + 0.5 ? column : null;
+        if (column == null) return null;
+        double up = maid.getY() - column.get(0).getY();
+        return up > ABOVE_JUMP || maid.onGround() && up > 0.5 ? column : null;
     }
 
     /** Whether the maid's box sits inside the column's x/z cell (she is climbing or standing on it). */
@@ -435,6 +534,17 @@ final class ReachPlanner {
      */
     @Nullable
     static List<BlockPos> planWalk(ServerLevel level, EntityMaid maid, BlockPos goal, double within) {
+        return planWalk(level, maid, goal, within, null);
+    }
+
+    /**
+     * The same; when there is no way, {@code noWayFrom} (if given) receives the spots the search
+     * showed to have none either: everything she can walk to if the search covered all of it,
+     * otherwise just where she stands.
+     */
+    @Nullable
+    static List<BlockPos> planWalk(ServerLevel level, EntityMaid maid, BlockPos goal, double within,
+                                   @Nullable java.util.Set<BlockPos> noWayFrom) {
         record Node(BlockPos pos, int length, @Nullable Node from) {
         }
         Vec3 goalCentre = Vec3.atCenterOf(goal);
@@ -458,32 +568,54 @@ final class ReachPlanner {
                 BlockPos beside = at.offset(side[0], 0, side[1]);
                 if (!level.isLoaded(beside)) continue;
                 BlockPos next = null;
-                if (headroom && canWalkAt(level, maid, beside.above())) {
+                if (headroom && canWalkAt(level, beside.above())) {
                     next = beside.above();
                 } else if (walkable(level, beside) && walkable(level, beside.above())) {
                     for (int drop = 0; drop <= MAX_DROP; drop++) {
                         BlockPos feet = beside.below(drop);
-                        if (canWalkAt(level, maid, feet)) {
+                        if (canWalkAt(level, feet)) {
                             next = feet;
                             break;
                         }
-                        if (!walkable(level, feet.below())) break;
+                        // a scaffold stops the fall (she would land on top of it, which the search does not use)
+                        if (!passable(level, feet.below())) break;
                     }
                 }
                 if (next != null && seen.add(next)) open.add(new Node(next, node.length() + 1, node));
             }
         }
+        if (noWayFrom != null) {
+            if (open.isEmpty()) noWayFrom.addAll(seen);
+            else noWayFrom.add(start);
+        }
         return null;
     }
 
-    /** Like {@link #canStandAt}, but closed wooden doors count as open: maids open them. */
-    private static boolean canWalkAt(Level level, EntityMaid maid, BlockPos feet) {
-        BlockPos below = feet.below();
-        return level.getBlockState(below).entityCanStandOn(level, below, maid)
-                && walkable(level, feet) && walkable(level, feet.above());
+    /** Like {@link #canStandAt}, but closed wooden doors count as open (maids open them) and she walks under or through scaffolding. */
+    private static boolean canWalkAt(Level level, BlockPos feet) {
+        return walksOn(level, feet.below()) && walkable(level, feet) && walkable(level, feet.above());
     }
 
+    /**
+     * A floor for the ground search: a block whose top is between half and full height, so stairs
+     * and slabs (a door step) count. Not scaffolding (the search keeps off the job's columns), nor
+     * fences and walls, which a maid cannot step onto.
+     */
+    private static boolean walksOn(Level level, BlockPos pos) {
+        BlockState state = level.getBlockState(pos);
+        if (state.is(Blocks.SCAFFOLDING)) return false;
+        net.minecraft.world.phys.shapes.VoxelShape shape = state.getCollisionShape(level, pos);
+        if (shape.isEmpty()) return false;
+        double top = shape.max(Direction.Axis.Y);
+        return top >= 0.5 && top <= 1.0;
+    }
+
+    /**
+     * A cell she can walk through: empty, a wooden door, or scaffolding, which has no collision
+     * from below or inside (asked without an entity, the game answers as if standing on top).
+     */
     private static boolean walkable(Level level, BlockPos pos) {
-        return passable(level, pos) || net.minecraft.world.level.block.DoorBlock.isWoodenDoor(level.getBlockState(pos));
+        BlockState state = level.getBlockState(pos);
+        return passable(level, pos) || net.minecraft.world.level.block.DoorBlock.isWoodenDoor(state) || state.is(Blocks.SCAFFOLDING);
     }
 }

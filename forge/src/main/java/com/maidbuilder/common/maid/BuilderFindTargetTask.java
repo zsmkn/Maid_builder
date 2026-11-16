@@ -57,6 +57,7 @@ public class BuilderFindTargetTask extends MaidCheckRateTask {
     protected boolean checkExtraStartConditions(ServerLevel level, EntityMaid maid) {
         // Paths are only computed for mobs standing on something (or swimming): searching mid-jump
         // would find no way to any block and count failed tries.
+        if (session.topUp && level.getGameTime() < session.topUpUntil) return false; // off to stock up first
         return BuilderMaidData.jobOf(maid) != null && session.idle() && (maid.onGround() || maid.isInWater())
                 && super.checkExtraStartConditions(level, maid);
     }
@@ -91,7 +92,8 @@ public class BuilderFindTargetTask extends MaidCheckRateTask {
             return;
         }
         BlockPos stand = ReachPlanner.findStand(level, maid, job, pos);
-        boolean again = index == lastWalkStep && maid.blockPosition().equals(lastWalkFrom);
+        // a trip to stock up in between is not standing still: the count starts over after it
+        boolean again = index == lastWalkStep && maid.blockPosition().equals(lastWalkFrom) && session.lastTopUp < lastWalkSince;
         if (stand != null && again && gameTime - lastWalkSince >= STUCK_WALK_TICKS) {
             // She keeps setting off to this step from this very block (e.g. wedged against a fence,
             // and the walk ends without her getting anywhere): count it as a failed try like any
@@ -144,6 +146,7 @@ public class BuilderFindTargetTask extends MaidCheckRateTask {
         AABB self = maid.getBoundingBox();
         BlockPos footing = maid.getOnPos();
         job.sweepClear(level, CLEAR_SWEEP);
+        long firstLayer = job.firstBuildLayer();
         return job.findBest(level.getGameTime(), i -> {
             BlockPos pos = job.pos(i);
             if (!level.isLoaded(pos)) return false;
@@ -162,7 +165,7 @@ public class BuilderFindTargetTask extends MaidCheckRateTask {
             }
             if (!homeMode && (owner == null || !pos.closerToCenterThan(owner.position(), ownerRange))) return false;
             if (self.intersects(new AABB(pos)) || job.isScaffold(pos) || session.isDeferred(i, gameTime)) return false;
-            return MaidInventory.has(inventory, job.requirements(i)) && also.test(i);
+            return MaidInventory.has(inventory, job.requirements(i)) && job.joinsBuilt(level, i, firstLayer) && also.test(i);
         }, i -> score(maid, job.pos(i), others), MaidBuilderConfig.MAX_SCAN_PER_SEARCH.get());
     }
 

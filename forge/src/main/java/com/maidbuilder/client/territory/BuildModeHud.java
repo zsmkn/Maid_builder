@@ -2,17 +2,20 @@ package com.maidbuilder.client.territory;
 
 import com.maidbuilder.client.MaidBuilderClientConfig;
 import com.maidbuilder.client.WandKeys;
-import net.minecraft.ChatFormatting;
+import com.maidbuilder.client.ui.HudCard;
+import com.maidbuilder.client.ui.Ui;
+
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.network.chat.Component;
 
-import java.util.ArrayList;
 import java.util.List;
 
-/** Top-left overlay in build mode: template, position, whether it can go there, keys. */
+/** Overlay in build mode, above the hotbar: template, position, whether it can go there, keys. */
 public final class BuildModeHud {
+    /** Room left under the card for the hotbar, the bars above it and the action bar text. */
+    private static final int BOTTOM_MARGIN = 72;
+
     private BuildModeHud() {
     }
 
@@ -21,39 +24,44 @@ public final class BuildModeHud {
         if (!BuildMode.active() || mc.player == null || mc.options.hideGui || mc.options.renderDebug
                 || !MaidBuilderClientConfig.SHOW_HUD.get()) return;
         var template = BuildMode.template();
-        List<Component> lines = new ArrayList<>();
-        lines.add(Component.translatable("hud.maidbuilder.build.title", Component.translatable(template.def().nameKey()))
-                .withStyle(ChatFormatting.GOLD));
+        HudCard card = new HudCard(mc.font);
+        int border = Ui.FRAME;
+        card.text(Component.translatable("hud.maidbuilder.build.title", Component.translatable(template.def().nameKey())), Ui.AMBER);
         if (BuildMode.loading()) {
-            lines.add(Component.translatable("hud.maidbuilder.build.loading").withStyle(ChatFormatting.GRAY));
+            card.text(Component.translatable("hud.maidbuilder.build.loading"), Ui.MUTED);
         } else {
             if (BuildMode.origin() != null) {
-                lines.add(Component.translatable("hud.maidbuilder.placement", BuildMode.origin().toShortString(),
-                        BuildMode.rotation().getSerializedName(), BuildMode.mirror().getSerializedName()));
+                card.text(Component.translatable("hud.maidbuilder.placement", BuildMode.origin().toShortString(),
+                        BuildMode.rotation().getSerializedName(), BuildMode.mirror().getSerializedName()), Ui.MUTED);
             }
             Component problem = BuildMode.problem();
             if (BuildMode.waiting()) {
-                lines.add(Component.translatable("hud.maidbuilder.build.waiting").withStyle(ChatFormatting.GRAY));
+                card.text(Component.translatable("hud.maidbuilder.build.waiting"), Ui.MUTED);
             } else if (problem != null) {
-                lines.add(problem.copy().withStyle(ChatFormatting.RED));
+                card.wrapped(problem, Ui.RED);
+                border = Ui.RED;
             } else {
-                lines.add(Component.translatable("hud.maidbuilder.build.ok").withStyle(ChatFormatting.GREEN));
+                card.text(Component.translatable("hud.maidbuilder.build.ok"), Ui.GREEN);
+                border = Ui.GREEN;
             }
         }
-        lines.add(Component.translatable("hud.maidbuilder.build.keys", WandKeys.ROTATE.getTranslatedKeyMessage(),
-                WandKeys.MIRROR.getTranslatedKeyMessage(), WandKeys.UP.getTranslatedKeyMessage(), WandKeys.DOWN.getTranslatedKeyMessage())
-                .withStyle(ChatFormatting.GRAY));
-        lines.add(Component.translatable("hud.maidbuilder.build.keys2", WandKeys.MATERIALS.getTranslatedKeyMessage(),
-                TerritoryKeys.BUILD_MODE.getTranslatedKeyMessage()).withStyle(ChatFormatting.GRAY));
+        card.rule();
+        card.keys(List.of(
+                new HudCard.Key(WandKeys.ROTATE.getTranslatedKeyMessage(), Component.translatable("hud.maidbuilder.key.rotate")),
+                new HudCard.Key(WandKeys.MIRROR.getTranslatedKeyMessage(), Component.translatable("hud.maidbuilder.key.mirror")),
+                new HudCard.Key(List.of(WandKeys.UP.getTranslatedKeyMessage(), WandKeys.DOWN.getTranslatedKeyMessage()),
+                        Component.translatable("hud.maidbuilder.key.height"))));
+        card.keys(List.of(
+                new HudCard.Key(WandKeys.MATERIALS.getTranslatedKeyMessage(), Component.translatable("hud.maidbuilder.key.materials")),
+                new HudCard.Key(TerritoryKeys.BUILD_MODE.getTranslatedKeyMessage(), Component.translatable("hud.maidbuilder.key.leave"))));
 
-        Font font = mc.font;
-        int width = 0;
-        for (Component line : lines) width = Math.max(width, font.width(line));
-        int x = 4, y = 4, lineHeight = font.lineHeight + 1;
-        graphics.fill(x - 2, y - 2, x + width + 2, y + lines.size() * lineHeight + 1, 0x80000000);
-        for (Component line : lines) {
-            graphics.drawString(font, line, x, y, 0xFFFFFF, false);
-            y += lineHeight;
+        int x = (graphics.guiWidth() - card.width()) / 2;
+        int y = graphics.guiHeight() - BOTTOM_MARGIN - card.height();
+        if (y < graphics.guiHeight() / 2 + 16) {
+            // a small window: down there it would cover what she is aiming at, so go to the corner
+            x = 4;
+            y = 4;
         }
+        card.render(graphics, x, y, border);
     }
 }

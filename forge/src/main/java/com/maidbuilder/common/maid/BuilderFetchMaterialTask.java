@@ -58,6 +58,9 @@ public class BuilderFetchMaterialTask extends Behavior<EntityMaid> {
     private static final double TEAMMATE_RANGE = 32;
     /** Smallest amount worth walking to a teammate for. */
     private static final int MIN_SHARE = 4;
+    /** Failed trips in a row after which she walks somewhere else at random before trying again. */
+    private static final int STUCK_TRIPS = 2;
+    private static final int WANDER_RANGE = 8;
 
     private final BuilderSession session;
     private final float speed;
@@ -70,6 +73,12 @@ public class BuilderFetchMaterialTask extends Behavior<EntityMaid> {
     private Map<Item, Integer> wanted;
     /** The way round to the container when the game's path finder found none. */
     private final RouteFollower route = new RouteFollower();
+    /** Trips in a row that ended without reaching the container or teammate. */
+    private int failedTrips;
+    /** Set when she was sent off to wander: the walk target is hers to keep when the task stops. */
+    private boolean wandering;
+    /** Set once she took what she came for: from then on the walk target belongs to whoever sets it next. */
+    private boolean arrived;
 
     public BuilderFetchMaterialTask(BuilderSession session, float speed) {
         super(ImmutableMap.of(
@@ -81,8 +90,12 @@ public class BuilderFetchMaterialTask extends Behavior<EntityMaid> {
 
     @Override
     protected boolean checkExtraStartConditions(ServerLevel level, EntityMaid maid) {
+        // Asked by the scaffold task to stock up before a climb: at once, and although she could still build.
+        boolean topUp = session.topUp && !session.busy;
+        if (topUp) cooldown = 0;
         if (--cooldown > 0 || session.busy) return false;
         cooldown = CHECK_INTERVAL;
+        session.topUp = false;
         UUID jobId = BuilderMaidData.jobOf(maid);
         if (jobId == null) return false;
         Optional<BuildJob> found = BuildJobManager.loaded(level.getServer(), jobId);
@@ -104,8 +117,10 @@ public class BuilderFetchMaterialTask extends Behavior<EntityMaid> {
         job.touchWorker(maid.getUUID(), now);
         // Still something she can build with what she carries? Then keep building. (Clearing needs no
         // materials, so it does not count: a clear step waiting for scaffolding must not stop her fetching.)
-        if (job.findNext(now, i -> !job.isClearStep(i) && MaidInventory.has(inventory, job.requirements(i))
-                && inRange(maid, job.pos(i)), LOOKAHEAD_STEPS) >= 0) {
+        // (Nor does a block that would hang in the air: she builds that once its layer is in turn.)
+        long firstLayer = job.firstBuildLayer();
+        if (!topUp && job.findNext(now, i -> !job.isClearStep(i) && MaidInventory.has(inventory, job.requirements(i))
+                && inRange(maid, job.pos(i)) && job.joinsBuilt(level, i, firstLayer), LOOKAHEAD_STEPS) >= 0) {
             return false;
         }
         // Only her share of what is left (at most LOOKAHEAD_STEPS): otherwise the first maid at the
@@ -205,8 +220,11 @@ public class BuilderFetchMaterialTask extends Behavior<EntityMaid> {
         if (target == null) return;
         if (maid.distanceToSqr(target) <= TAKE_DISTANCE * TAKE_DISTANCE) {
             take(level, maid);
+            failedTrips = 0;
             container = null;
             teammate = null;
+            arrived = true;
+            maid.getBrain().eraseMemory(MemoryModuleType.WALK_TARGET);
         } else if (container != null && !route.planned() && stopsShort(maid, target)) {
             // The game's path finder only got part of the way (e.g. the way out of a building is
             // longer than it looks): plan the way round before she walks into the wall's dead end.
@@ -229,7 +247,24 @@ public class BuilderFetchMaterialTask extends Behavior<EntityMaid> {
             cooldown = NOTHING_FOUND_INTERVAL;
             container = null;
             teammate = null;
+            if (++failedTrips >= STUCK_TRIPS) unstick(level, maid);
         }
+    }
+
+    /**
+     * Stuck where she stands (the same trip keeps failing): lets go of the block she meant to build
+     * and walks to a random spot nearby, so the next try starts from somewhere else.
+     */
+    private void unstick(ServerLevel level, EntityMaid maid) {
+        failedTrips = 0;
+        UUID jobId = BuilderMaidData.jobOf(maid);
+        if (jobId != null) BuildJobManager.loaded(level.getServer(), jobId).ifPresent(job -> job.release(maid.getUUID()));
+        session.scaffoldStep = -1;
+        Vec3 spot = net.minecraft.world.entity.ai.util.LandRandomPos.getPos(maid, WANDER_RANGE, 3);
+        MaidBuilder.LOGGER.debug("Maid {} seems stuck at {}: wandering to {}", maid.getUUID(), maid.blockPosition(), spot);
+        if (spot == null) return;
+        maid.getBrain().setMemory(MemoryModuleType.WALK_TARGET, new WalkTarget(spot, speed, 0));
+        wandering = true;
     }
 
     /**
@@ -250,6 +285,9 @@ public class BuilderFetchMaterialTask extends Behavior<EntityMaid> {
                 : teammate != null ? teammate.getAvailableInv(false) : null;
         if (from == null) return;
         int moved = MaterialContainers.transfer(from, maid.getAvailableInv(false), wanted);
+        if (moved == 0 && container != null && putBack(level, maid, from)) {
+            moved = MaterialContainers.transfer(from, maid.getAvailableInv(false), wanted);
+        }
         MaidBuilder.LOGGER.debug("Maid {} took {} items from {}", maid.getUUID(), moved,
                 container != null ? container : "teammate " + teammate.getUUID());
         if (moved > 0) {
@@ -257,7 +295,38 @@ public class BuilderFetchMaterialTask extends Behavior<EntityMaid> {
             if (teammate != null) teammate.swing(InteractionHand.MAIN_HAND);
             level.playSound(null, maid.blockPosition(), SoundEvents.ITEM_PICKUP, SoundSource.NEUTRAL, 0.5f, 1.0f);
         }
-        cooldown = 0;
+        // nothing fitted or nothing was left after all: no use asking again the very next tick
+        cooldown = moved > 0 ? 0 : NOTHING_FOUND_INTERVAL;
+    }
+
+    /**
+     * No room for what she came for: her few slots are full of materials for later blocks (she fetches
+     * only when she can build nothing with what she carries). Those go back into the container, the
+     * ones needed last first, until a slot is free; true if any did.
+     */
+    private boolean putBack(ServerLevel level, EntityMaid maid, IItemHandler into) {
+        UUID jobId = BuilderMaidData.jobOf(maid);
+        BuildJob job = jobId == null ? null : BuildJobManager.loaded(level.getServer(), jobId).orElse(null);
+        if (job == null || wanted == null) return false;
+        java.util.List<Item> later = new java.util.ArrayList<>(job.remainingMaterials().keySet());
+        IItemHandler inv = maid.getAvailableInv(false);
+        boolean any = false;
+        for (int i = later.size() - 1; i >= 0; i--) {
+            Item item = later.get(i);
+            if (wanted.containsKey(item) || item == Items.SCAFFOLDING) continue;
+            for (int slot = 0; slot < inv.getSlots(); slot++) {
+                if (!inv.getStackInSlot(slot).is(item)) continue;
+                net.minecraft.world.item.ItemStack taken = inv.extractItem(slot, Integer.MAX_VALUE, false);
+                net.minecraft.world.item.ItemStack left = net.minecraftforge.items.ItemHandlerHelper.insertItemStacked(into, taken, false);
+                if (!left.isEmpty()) inv.insertItem(slot, left, false);
+                if (left.getCount() < taken.getCount()) any = true;
+                if (inv.getStackInSlot(slot).isEmpty()) {
+                    MaidBuilder.LOGGER.debug("Maid {} put {} back to make room", maid.getUUID(), item);
+                    return true;
+                }
+            }
+        }
+        return any;
     }
 
     @Override
@@ -266,6 +335,10 @@ public class BuilderFetchMaterialTask extends Behavior<EntityMaid> {
         teammate = null;
         wanted = null;
         route.reset();
-        maid.getBrain().eraseMemory(MemoryModuleType.WALK_TARGET);
+        // After a finished trip the walk target is no longer hers: the next task may have set its own
+        // already (taking it away made a maid who had just stocked up give up her walk to the scaffolding).
+        if (!wandering && !arrived) maid.getBrain().eraseMemory(MemoryModuleType.WALK_TARGET);
+        wandering = false;
+        arrived = false;
     }
 }

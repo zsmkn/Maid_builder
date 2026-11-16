@@ -48,6 +48,12 @@ final class TerritorySelfTest {
         if (mc.player == null) return true;
         var server = mc.getSingleplayerServer();
         if (server == null) return true;
+        // a language reload takes as long as it takes: the steps after it wait for it and for its overlay to fade
+        if (reload != null && (!reload.isDone() || mc.getOverlay() != null)) {
+            held++;
+            return false;
+        }
+        t -= held;
         UUID playerId = mc.player.getUUID();
         if (t == 0) {
             startYaw = mc.player.getYRot();
@@ -61,6 +67,7 @@ final class TerritorySelfTest {
         if (t == 31) shot(mc, "buildings");
         if (t == 32) press(mc, "screen.maidbuilder.territory.tab.maids");
         if (t == 35) shot(mc, "maids");
+        if (t == 36 && mc.screen instanceof TerritoryScreen screen) savedReport = screen.report();
         if (t == 36 && mc.screen instanceof TerritoryScreen screen && !screen.report().maids().isEmpty()) {
             mc.setScreen(new com.maidbuilder.client.territory.WorkplacePickerScreen(screen, screen.report(), screen.report().maids().get(0)));
         }
@@ -160,7 +167,60 @@ final class TerritorySelfTest {
             ProblemHighlights.clear();
             setWall(mc, mc.player.getDirection(), false);
         }
-        return t >= 130;
+        // 1.20.1 port checks of the 1.3.0 screens the steps above do not reach: a job with blocks left for
+        // the player (attention button, badge on the tab), then the same screens in Traditional Chinese
+        if (t == 128) openReport(mc, true);
+        if (t == 129) press(mc, "screen.maidbuilder.territory.tab.construction");
+        if (t == 132) shot(mc, "needs_player");
+        if (t == 133) {
+            mc.setScreen(null);
+            mc.getLanguageManager().setSelected("zh_tw");
+            reload = mc.reloadResourcePacks();
+        }
+        if (t == 136) openReport(mc, true);
+        if (t == 137) press(mc, "screen.maidbuilder.territory.tab.overview");
+        if (t == 140) shot(mc, "zh_overview");
+        if (t == 141) press(mc, "screen.maidbuilder.territory.tab.construction");
+        if (t == 144) shot(mc, "zh_construction");
+        if (t == 145) press(mc, "screen.maidbuilder.territory.tab.buildings");
+        if (t == 148) shot(mc, "zh_buildings");
+        if (t == 149) press(mc, "screen.maidbuilder.territory.tab.maids");
+        if (t == 152) shot(mc, "zh_maids");
+        if (t == 153) {
+            press(mc, "screen.maidbuilder.territory.tab.overview");
+            mc.setScreen(savedReport == null ? null : new TemplateCatalogScreen(savedReport.id()));
+        }
+        if (t == 156) shot(mc, "zh_catalog");
+        if (t == 157) {
+            mc.setScreen(null);
+            mc.getLanguageManager().setSelected("en_us");
+            reload = mc.reloadResourcePacks();
+        }
+        return t >= 160;
+    }
+
+    @javax.annotation.Nullable
+    private static TerritoryPayloads.TerritoryReport savedReport;
+    @javax.annotation.Nullable
+    private static java.util.concurrent.CompletableFuture<Void> reload;
+    private static int held;
+
+    /** The territory screen on the report seen earlier (its territory is gone by now), with a job waiting for the player. */
+    private static void openReport(Minecraft mc, boolean needsPlayer) {
+        TerritoryPayloads.TerritoryReport r = savedReport;
+        if (r == null) {
+            MaidBuilder.LOGGER.warn("[selftest] no territory report was seen");
+            return;
+        }
+        java.util.List<TerritoryPayloads.JobRow> jobs = new java.util.ArrayList<>(r.jobs());
+        if (needsPlayer) {
+            jobs.add(0, new TerritoryPayloads.JobRow(UUID.randomUUID(), "", "maidbuilder:dormitory", 250, 253, 3, 1, false, false));
+            jobs.add(new TerritoryPayloads.JobRow(UUID.randomUUID(), "", "maidbuilder:warehouse", 12, 40, 0, 2, false, true));
+        }
+        mc.setScreen(new TerritoryScreen(new TerritoryPayloads.TerritoryReport(r.open(), r.id(), r.ownerName(), r.flag(), r.level(),
+                r.maxLevel(), r.radius(), r.nextRadius(), r.active(), r.flagsOwned(), r.maxFlags(), r.prosperity(), r.buildingPoints(),
+                r.residentPoints(), r.residents(), r.residentCap(), r.conditions(), r.upgradeItems(), r.canUpgrade(), jobs, r.buildings(),
+                r.maids(), r.sources(), r.bindingSources(), r.hasWarehouse(), r.bonuses(), r.nextBonuses())));
     }
 
     private static net.minecraft.world.item.ItemStack savedHand = net.minecraft.world.item.ItemStack.EMPTY;

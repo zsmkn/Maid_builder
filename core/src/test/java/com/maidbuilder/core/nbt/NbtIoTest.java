@@ -9,6 +9,7 @@ import java.io.IOException;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class NbtIoTest {
     private static NbtCompound roundTrip(NbtCompound tag, long limit) throws IOException {
@@ -40,6 +41,38 @@ class NbtIoTest {
     void enforcesSizeLimit() {
         NbtCompound tag = new NbtCompound().put("big", new long[10_000]);
         assertThrows(IOException.class, () -> roundTrip(tag, 1000));
+    }
+
+    /** A few bytes claiming a huge array: the reader must find the data missing, not allocate for it first. */
+    @Test
+    void arrayLengthWithoutDataTakesNoMemory() throws IOException {
+        for (byte type : new byte[]{NbtType.BYTE_ARRAY, NbtType.INT_ARRAY, NbtType.LONG_ARRAY}) {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            java.io.DataOutputStream out = new java.io.DataOutputStream(bytes);
+            out.writeByte(NbtType.COMPOUND);
+            out.writeUTF("");
+            out.writeByte(type);
+            out.writeUTF("a");
+            out.writeInt(type == NbtType.BYTE_ARRAY ? Integer.MAX_VALUE - 8 : 250_000_000);
+            out.writeLong(0);
+            long before = Runtime.getRuntime().totalMemory();
+            assertThrows(java.io.EOFException.class, () -> NbtIo.read(new ByteArrayInputStream(bytes.toByteArray()), 4L << 30));
+            assertTrue(Runtime.getRuntime().totalMemory() - before < 256L << 20, "heap grew for an array that is not there");
+        }
+    }
+
+    @Test
+    void readsArraysLongerThanOneChunk() throws IOException {
+        byte[] ba = new byte[200_001];
+        int[] ia = new int[70_003];
+        long[] la = new long[40_007];
+        for (int i = 0; i < ba.length; i++) ba[i] = (byte) (i * 31);
+        for (int i = 0; i < ia.length; i++) ia[i] = i * 7919;
+        for (int i = 0; i < la.length; i++) la[i] = i * 1_000_003L;
+        NbtCompound read = roundTrip(new NbtCompound().put("ba", ba).put("ia", ia).put("la", la), 1 << 22);
+        assertArrayEquals(ba, (byte[]) read.get("ba"));
+        assertArrayEquals(ia, (int[]) read.get("ia"));
+        assertArrayEquals(la, read.getLongArray("la"));
     }
 
     @Test

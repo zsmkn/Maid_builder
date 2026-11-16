@@ -976,6 +976,32 @@ public final class TerritoryGameTests {
             });
         }
 
+        // 1.3.0: the "fine" structures no template refers to yet still have to read and resolve in this version
+        for (String path : List.of("apiary", "canteen", "dormitory", "large_greenhouse", "large_ranch", "lumberyard", "ranch",
+                "small_greenhouse", "sugar_cane_farm", "village_hall", "warehouse")) {
+            var file = MaidBuilder.id("maidbuilder/structures/" + path + "_fine.litematic");
+            var resource = server.getResourceManager().getResource(file);
+            if (resource.isEmpty()) {
+                helper.fail("structure " + file + " is missing");
+                return;
+            }
+            try (java.io.InputStream in = resource.get().open()) {
+                var schematic = new com.maidbuilder.core.schematic.SchematicReader(1 << 21, 64L << 20).read(in);
+                com.maidbuilder.common.StateResolver resolver = new com.maidbuilder.common.StateResolver(schematic.minecraftDataVersion());
+                int[] blocks = {0};
+                for (var region : schematic.regions()) {
+                    region.forEachBlock((pos, state, local) -> {
+                        resolver.resolve(state);
+                        blocks[0]++;
+                    });
+                }
+                if (blocks[0] == 0) helper.fail("structure " + file + " has no blocks");
+                if (!resolver.unknownBlocks().isEmpty()) helper.fail("structure " + file + " has unknown blocks " + resolver.unknownBlocks());
+            } catch (java.io.IOException | RuntimeException e) {
+                helper.fail("structure " + file + " does not read: " + e);
+            }
+        }
+
         // level table: 5 levels from the data pack, every upgrade item resolves
         var levels = TerritoryLevels.definitions();
         if (levels.size() != 5 || TerritoryLevels.table().maxLevel() != 5) helper.fail("expected 5 territory levels, got " + levels.size());

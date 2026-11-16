@@ -78,12 +78,25 @@ public final class UploadManager {
         ByteArrayOutputStream out = new ByteArrayOutputStream((int) pending.bytes);
         for (byte[] part : pending.chunks) out.writeBytes(part);
         byte[] bytes = out.toByteArray();
-        try {
-            if (!sha1(bytes).equals(pending.sha1)) throw new IOException("checksum mismatch");
-            SchematicStore.storeBytes(player.server, bytes);
-        } catch (IOException e) {
-            MaidBuilder.LOGGER.warn("Rejected schematic upload {} from {}", pending.file, player.getGameProfile().getName(), e);
-            player.sendSystemMessage(Component.translatable("message.maidbuilder.upload.failed", pending.file, e.getMessage()));
+        // Checking a big schematic (unpacking and reading all of it) takes a while: not on the server thread.
+        net.minecraft.server.MinecraftServer server = player.server;
+        java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            try {
+                if (!sha1(bytes).equals(pending.sha1)) throw new IOException("checksum mismatch");
+                SchematicStore.storeBytes(server, bytes);
+                return null;
+            } catch (IOException | RuntimeException e) {
+                return e;
+            }
+        }, net.minecraft.Util.backgroundExecutor()).thenAcceptAsync(error -> finish(player, pending, error), server);
+    }
+
+    /** Back on the server thread: tells the player, and goes on with what the upload was for. */
+    private static void finish(ServerPlayer player, Pending pending, @javax.annotation.Nullable Exception error) {
+        if (error != null) MaidBuilder.LOGGER.warn("Rejected schematic upload {} from {}", pending.file, player.getGameProfile().getName(), error);
+        if (player.hasDisconnected()) return;
+        if (error != null) {
+            player.sendSystemMessage(Component.translatable("message.maidbuilder.upload.failed", pending.file, error.getMessage()));
             return;
         }
         player.displayClientMessage(Component.translatable("message.maidbuilder.upload.done", pending.file), true);

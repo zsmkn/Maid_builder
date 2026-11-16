@@ -38,6 +38,7 @@ public final class MaidBuilder {
 
         MinecraftForge.EVENT_BUS.addListener((RegisterCommandsEvent e) -> MaidBuilderCommand.register(e.getDispatcher(), e.getBuildContext()));
         MinecraftForge.EVENT_BUS.addListener((ServerStoppedEvent e) -> BuildJobManager.clearRuntimeCaches());
+        MinecraftForge.EVENT_BUS.addListener((net.minecraftforge.event.server.ServerStartedEvent e) -> BuildJobManager.preload(e.getServer()));
         MinecraftForge.EVENT_BUS.addListener((AddReloadListenerEvent e) -> {
             e.addListener(new TerritoryLevels());
             e.addListener(new TemplateRegistry());

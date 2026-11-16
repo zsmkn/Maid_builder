@@ -62,7 +62,7 @@ final class ClientNetSelfTest {
         } catch (RuntimeException | IOException e) {
             fail("exception " + e);
             MaidBuilder.LOGGER.error("[nettest]", e);
-            ticks = 600;
+            ticks = 699; // the next tick closes the game
         }
     }
 
@@ -163,19 +163,50 @@ final class ClientNetSelfTest {
                 BuildMode.stop();
                 if (territory != null) mc.player.connection.sendCommand("maidbuilder territory remove " + territory);
                 mc.player.connection.sendCommand("setblock " + flag.getX() + " " + flag.getY() + " " + flag.getZ() + " air");
+                mc.player.connection.sendCommand("give @s maidbuilder:blueprint_wand");
             }
+            // 1.3.0: uploads are checked off the server thread. A broken one (a few bytes claiming a
+            // huge array) must be turned down without a job and without holding the server up.
             case 480 -> {
                 check(territory != null && ClientTerritories.get(territory) == null, "territory removed and the list synced");
+                check(wand(mc) != null && !ModItemData.BUILD_JOB.has(wand(mc)), "a fresh, unlinked Blueprint Wand");
+                badUpload = brokenUpload();
+                ModNetwork.sendToServer(new Payloads.SelectSchematic(BAD_FILE, ClientSchematics.sha1(badUpload), origin.offset(64, 0, 0)));
+            }
+            case 500 -> mc.options.keyShift.setDown(true);
+            case 505 -> mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND); // confirm: the server asks for the file
+            case 510 -> mc.options.keyShift.setDown(false);
+            case 520 -> ModNetwork.sendToServer(new Payloads.UploadChunk(ClientSchematics.sha1(badUpload), 0, 1, badUpload));
+            case 560 -> {
+                ItemStack wand = wand(mc);
+                check(wand != null && ModItemData.WAND_PLACEMENT.has(wand) && BAD_FILE.equals(ModItemData.WAND_PLACEMENT.get(wand).file()),
+                        "the broken schematic was selected on the server");
+                check(wand != null && !ModItemData.BUILD_JOB.has(wand), "the broken upload made no job");
+                mc.player.connection.sendCommand("maidbuilder job list"); // the server still answers (see the chat lines in the log)
+            }
+            case 580 -> {
                 MaidBuilder.LOGGER.info("[nettest] {}", failed ? "SOME CHECKS FAILED" : "ALL CHECKS PASSED");
                 mc.player.connection.sendCommand("stop"); // saves the world: the job must survive the restart
             }
-            case 500 -> {
+            case 600 -> {
                 mc.stop();
             }
-            case 600 -> mc.stop();
+            case 700 -> mc.stop();
             default -> {
             }
         }
+    }
+
+    private static final String BAD_FILE = "nettest_broken.litematic";
+    private static byte[] badUpload = new byte[0];
+
+    /** A gzipped NBT compound whose only entry is a long array said to hold two billion longs, and then nothing. */
+    private static byte[] brokenUpload() throws IOException {
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        try (OutputStream out = new java.util.zip.GZIPOutputStream(bytes)) {
+            out.write(new byte[] {10, 0, 0, 12, 0, 1, 'x', 0x7F, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF});
+        }
+        return bytes.toByteArray();
     }
 
     private static ItemStack wand(Minecraft mc) {

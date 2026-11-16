@@ -224,6 +224,36 @@ public final class MaidBuilderGameTests {
         if (loaded.problem(1) != BuildJob.Problem.OBSTRUCTED || loaded.problem(0) != BuildJob.Problem.UNKNOWN) {
             helper.fail("problems changed on reload: " + loaded.problem(1) + " " + loaded.problem(0));
         }
+        // a save whose reasons point past the plan (the plan was rebuilt after they were written): they are dropped
+        net.minecraft.nbt.CompoundTag stray = saved.copy();
+        for (net.minecraft.nbt.Tag t : stray.getList("Jobs", net.minecraft.nbt.Tag.TAG_COMPOUND)) {
+            net.minecraft.nbt.CompoundTag jobTag = (net.minecraft.nbt.CompoundTag) t;
+            int[] pairs = jobTag.getIntArray("Problems");
+            int[] more = java.util.Arrays.copyOf(pairs, pairs.length + 4);
+            more[pairs.length] = job.size() + 1000;
+            more[pairs.length + 1] = BuildJob.Problem.OBSTRUCTED.ordinal();
+            more[pairs.length + 2] = -5;
+            more[pairs.length + 3] = BuildJob.Problem.OBSTRUCTED.ordinal();
+            jobTag.putIntArray("Problems", more);
+        }
+        BuildJob strayJob = com.maidbuilder.common.job.BuildJobData.load(stray).get(job.id());
+        if (strayJob == null) {
+            helper.fail("job with stray problem indices lost on reload");
+            return;
+        }
+        try {
+            strayJob.ensureLoaded(helper.getLevel().getServer());
+            int[] kept = strayJob.save().getIntArray("Problems");
+            if (kept.length != 2 || kept[0] != 1 || kept[1] != BuildJob.Problem.OBSTRUCTED.ordinal()) {
+                helper.fail("stray problem indices were kept: " + java.util.Arrays.toString(kept));
+            }
+        } catch (IOException | RuntimeException e) {
+            helper.fail("job with stray problem indices failed to load or save: " + e);
+            return;
+        }
+        if (strayJob.problem(1) != BuildJob.Problem.OBSTRUCTED || strayJob.problem(job.size() + 1000) != BuildJob.Problem.UNKNOWN) {
+            helper.fail("problems wrong after dropping stray indices: " + strayJob.problem(1));
+        }
         // a job saved by 1.0.0 has no clearing mode and must not start breaking blocks
         net.minecraft.nbt.CompoundTag old = saved.copy();
         for (net.minecraft.nbt.Tag t : old.getList("Jobs", net.minecraft.nbt.Tag.TAG_COMPOUND)) {
@@ -244,6 +274,33 @@ public final class MaidBuilderGameTests {
         if (!com.maidbuilder.common.job.BuildJobData.load(cancelled.save(new net.minecraft.nbt.CompoundTag())).get(job.id()).isCancelled()) {
             helper.fail("cancellation lost on reload");
         }
+        helper.succeed();
+    }
+
+    /**
+     * A broken upload (a few bytes claiming an array of two billion longs) is turned down when its
+     * length is read, and nothing is stored.
+     */
+    @GameTest(template = FLOOR)
+    public static void brokenUploadIsRejected(GameTestHelper helper) throws IOException {
+        java.io.ByteArrayOutputStream packed = new java.io.ByteArrayOutputStream();
+        try (java.io.OutputStream out = new java.util.zip.GZIPOutputStream(packed)) {
+            out.write(new byte[] {10, 0, 0, 12, 0, 1, 'x', 0x7F, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF});
+        }
+        byte[] bytes = packed.toByteArray();
+        String hash;
+        try {
+            hash = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-1").digest(bytes));
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+        try {
+            com.maidbuilder.common.SchematicStore.storeBytes(helper.getLevel().getServer(), bytes);
+            helper.fail("a broken upload was stored");
+        } catch (IOException e) {
+            if (!e.getMessage().contains("once unpacked")) helper.fail("turned down for another reason: " + e);
+        }
+        if (com.maidbuilder.common.SchematicStore.hasStored(helper.getLevel().getServer(), hash)) helper.fail("the broken upload left a file behind");
         helper.succeed();
     }
 
@@ -526,6 +583,54 @@ public final class MaidBuilderGameTests {
     // ---- 6. phase 7: out of reach -> ask for scaffolding, build it, climb it, take it down ----
 
     static final String TALL_FLOOR = "floor16_tall";
+
+    /** Scaffolding placed inside this box is refused through the placement event, like a protection mod would. */
+    @javax.annotation.Nullable
+    private static volatile net.minecraft.world.phys.AABB denyScaffoldIn;
+    private static boolean placeListenerRegistered;
+
+    private static void listenToPlacements() {
+        if (placeListenerRegistered) return;
+        placeListenerRegistered = true;
+        net.minecraftforge.common.MinecraftForge.EVENT_BUS.addListener((net.minecraftforge.event.level.BlockEvent.EntityPlaceEvent e) -> {
+            net.minecraft.world.phys.AABB box = denyScaffoldIn;
+            // for a placer that is not a player the event carries the replaced state: look at the world
+            if (box != null && e.getLevel().getBlockState(e.getPos()).is(Blocks.SCAFFOLDING)
+                    && box.contains(net.minecraft.world.phys.Vec3.atCenterOf(e.getPos()))) e.setCanceled(true);
+        });
+    }
+
+    /** Where she may not place blocks she puts up no scaffolding either, and keeps what she carries. */
+    @GameTest(template = TALL_FLOOR, timeoutTicks = 1400)
+    public static void protectedLandGetsNoScaffolding(GameTestHelper helper) {
+        listenToPlacements();
+        LitematicWriter.RegionBuilder rb = new LitematicWriter.RegionBuilder("pillar", IntPos.ZERO, new IntPos(1, PILLAR_HEIGHT, 1));
+        for (int y = 0; y < PILLAR_HEIGHT; y++) rb.set(0, y, 0, "minecraft:oak_planks");
+        BuildJob job = createJob(helper, LitematicWriter.schematic("pillar", 3955, List.of(rb.build())), PILLAR);
+        denyScaffoldIn = structureBounds(helper).inflate(1);
+        EntityMaid maid = spawnBuilderMaid(helper, job);
+        IItemHandler inv = maid.getAvailableInv(false);
+        ItemHandlerHelper.insertItemStacked(inv, new ItemStack(Items.OAK_PLANKS, PILLAR_HEIGHT), false);
+        ItemHandlerHelper.insertItemStacked(inv, new ItemStack(Items.SCAFFOLDING, 16), false);
+
+        helper.runAfterDelay(1200, () -> {
+            denyScaffoldIn = null;
+            if (job.count(BuildJob.DONE) < 4) helper.fail("low blocks not built: " + job.count(BuildJob.DONE));
+            if (job.count(BuildJob.DONE) == job.size()) helper.fail("the pillar got finished without scaffolding");
+            if (!job.scaffolds().isEmpty()) helper.fail(job.scaffolds().size() + " scaffolding blocks recorded");
+            for (int dx = -4; dx <= 4; dx++) {
+                for (int dz = -4; dz <= 4; dz++) {
+                    for (int y = 0; y < PILLAR_HEIGHT; y++) {
+                        BlockPos p = PILLAR.offset(dx, y, dz);
+                        if (helper.getBlockState(p).is(Blocks.SCAFFOLDING)) helper.fail("scaffolding stands at " + p);
+                    }
+                }
+            }
+            if (countItem(inv, Items.SCAFFOLDING) != 16) helper.fail("maid holds " + countItem(inv, Items.SCAFFOLDING) + " scaffolding, expected all 16");
+            BuildJobManager.data(helper.getLevel().getServer()).remove(job.id());
+            helper.succeed();
+        });
+    }
     private static final int PILLAR_HEIGHT = 10;
     private static final BlockPos PILLAR = new BlockPos(8, 2, 8);
 
@@ -1510,6 +1615,16 @@ public final class MaidBuilderGameTests {
      * blocks, the chest is outside behind that wall. Logs how long until she has the planks.
      */
     private static void fetchAroundHouse(GameTestHelper helper, int size, int built, String name) {
+        fetchAroundHouse(helper, size, built, name, false);
+    }
+
+    /** The same big house on carpeted ground: carpet is floor to walk on, not a wall. */
+    @GameTest(template = FLOOR, batch = "pathing_carpet", timeoutTicks = 2400)
+    public static void maidFetchesAroundBigHouseOverCarpet(GameTestHelper helper) {
+        fetchAroundHouse(helper, 21, 3, "around big house over carpet", true);
+    }
+
+    private static void fetchAroundHouse(GameTestHelper helper, int size, int built, String name, boolean carpet) {
         int minX = -10, maxX = size + 17, minZ = -14, maxZ = size + 13;
         // the ground reaches past the test structure: keep those chunks loaded (and ticking)
         java.util.List<net.minecraft.world.level.ChunkPos> forced = new java.util.ArrayList<>();
@@ -1543,6 +1658,14 @@ public final class MaidBuilderGameTests {
         }
         BlockPos chestRel = origin.offset(size + 7, 0, size / 2);
         helper.setBlock(chestRel, Blocks.CHEST);
+        if (carpet) {
+            for (int x = minX; x <= maxX; x++) {
+                for (int z = minZ; z <= maxZ; z++) {
+                    BlockPos p = new BlockPos(x, 2, z);
+                    if (helper.getBlockState(p).isAir()) helper.setBlock(p, Blocks.RED_CARPET);
+                }
+            }
+        }
         BlockPos chestAbs = helper.absolutePos(chestRel);
         IItemHandler chest = com.maidbuilder.common.MaterialContainers.handler(helper.getLevel(), chestAbs);
         if (chest == null) throw new IllegalStateException("chest has no item handler");
@@ -1557,7 +1680,81 @@ public final class MaidBuilderGameTests {
         });
     }
 
+    /**
+     * A 3x3 plank floor with a crafting table two blocks above its middle, nothing in between. The maid
+     * carries the table but no planks (those are in a chest): she must not hang the table in the air
+     * first, but fetch the planks, lay the floor and place the table when its layer is in turn.
+     */
+    @GameTest(template = FLOOR, timeoutTicks = 2400)
+    public static void maidDoesNotPlaceFloatingBlocksAhead(GameTestHelper helper) {
+        BlockPos origin = new BlockPos(7, 2, 7);
+        LitematicWriter.RegionBuilder rb = new LitematicWriter.RegionBuilder("floating", IntPos.ZERO, new IntPos(3, 3, 3));
+        for (int x = 0; x < 3; x++) for (int z = 0; z < 3; z++) rb.set(x, 0, z, "minecraft:oak_planks");
+        rb.set(1, 2, 1, "minecraft:crafting_table");
+        BuildJob job = createJob(helper, LitematicWriter.schematic("floating", 3955, List.of(rb.build())), origin);
+        BlockPos chestRel = new BlockPos(2, 2, 12);
+        helper.setBlock(chestRel, Blocks.CHEST);
+        BlockPos chestAbs = helper.absolutePos(chestRel);
+        IItemHandler chest = com.maidbuilder.common.MaterialContainers.handler(helper.getLevel(), chestAbs);
+        if (chest == null) throw new IllegalStateException("chest has no item handler");
+        ItemHandlerHelper.insertItemStacked(chest, new ItemStack(Items.OAK_PLANKS, 9), false);
+        job.toggleMaterialSource(chestAbs);
+        EntityMaid maid = spawnBuilderMaid(helper, job);
+        ItemHandlerHelper.insertItemStacked(maid.getAvailableInv(false), new ItemStack(Items.CRAFTING_TABLE), false);
+
+        BlockPos table = origin.offset(1, 2, 1);
+        boolean[] early = {false};
+        helper.onEachTick(() -> {
+            if (early[0] || !helper.getBlockState(table).is(Blocks.CRAFTING_TABLE)) return;
+            for (int x = 0; x < 3; x++) {
+                for (int z = 0; z < 3; z++) if (!helper.getBlockState(origin.offset(x, 0, z)).is(Blocks.OAK_PLANKS)) early[0] = true;
+            }
+        });
+        helper.succeedWhen(() -> {
+            if (early[0]) helper.fail("the crafting table was hung in the air before the floor was laid");
+            if (!job.isComplete() || job.count(BuildJob.DONE) != job.size()) {
+                helper.fail("progress " + job.count(BuildJob.DONE) + "/" + job.size() + ", needs player " + job.count(BuildJob.NEEDS_PLAYER));
+            }
+            helper.assertBlockPresent(Blocks.CRAFTING_TABLE, table);
+            BuildJobManager.data(helper.getLevel().getServer()).remove(job.id());
+        });
+    }
+
     private static final BlockPos POST = new BlockPos(8, 2, 8);
+
+    /**
+     * Changing the clearing mode renumbers the steps: the reasons kept for blocks left to the player
+     * follow their blocks, and none stays behind under a number the new plan no longer has.
+     */
+    @GameTest(template = FLOOR)
+    public static void clearingChangeKeepsProblemReasons(GameTestHelper helper) {
+        LitematicWriter.RegionBuilder rb = new LitematicWriter.RegionBuilder("post", IntPos.ZERO, new IntPos(13, 2, 13));
+        rb.set(6, 0, 6, "minecraft:oak_planks");
+        BuildJob job = createJob(helper, LitematicWriter.schematic("post", 3955, List.of(rb.build())), POST.offset(-6, 0, -6));
+        setClearing(helper, job, com.maidbuilder.common.job.ClearMode.ALL, 3);
+        int post = -1;
+        for (int i = 0; i < job.size(); i++) {
+            if (!job.isClearStep(i)) post = i;
+            job.leaveForPlayer(i, job.isClearStep(i) ? BuildJob.Problem.UNBREAKABLE : BuildJob.Problem.OBSTRUCTED);
+        }
+        if (post < 0 || job.size() < 2) helper.fail("expected the post and cells to clear, got " + job.size() + " steps");
+        job.save();
+
+        setClearing(helper, job, com.maidbuilder.common.job.ClearMode.OFF, 3);
+        if (job.size() != 1) helper.fail("expected only the post left, got " + job.size() + " steps");
+        if (job.status(0) != BuildJob.NEEDS_PLAYER || job.problem(0) != BuildJob.Problem.OBSTRUCTED) {
+            helper.fail("the post lost its state: status " + job.status(0) + ", reason " + job.problem(0));
+        }
+        BuildJob reloaded = BuildJob.load(job.save());
+        try {
+            reloaded.ensureLoaded(helper.getLevel().getServer());
+        } catch (IOException e) {
+            throw new IllegalStateException(e);
+        }
+        if (reloaded.problem(0) != BuildJob.Problem.OBSTRUCTED) helper.fail("reason lost on reload: " + reloaded.problem(0));
+        BuildJobManager.data(helper.getLevel().getServer()).remove(job.id());
+        helper.succeed();
+    }
 
     /**
      * One plank post in a 13x2x13 box of air, clearing radius 3: blocks on the post's layer within
