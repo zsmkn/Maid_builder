@@ -36,6 +36,15 @@ public final class SchematicStore {
     private static final LevelResource STORE = new LevelResource("maidbuilder");
     private static final Pattern SHA1 = Pattern.compile("[0-9a-f]{40}");
     private static final String EXTENSION = ".litematic";
+    /**
+     * Decoded NBT allowed per schematic: room for block entities and entities, plus the block data
+     * of the largest volume the server loads (2 bytes a block is a palette of 65536 states; the rest
+     * is for a second region layer such as pending ticks). An upload is compressed, so its size on
+     * the wire says little about this.
+     */
+    private static final long BASE_NBT_BYTES = 64L * 1024 * 1024;
+    private static final long NBT_BYTES_PER_BLOCK = 4;
+    private static final long MAX_NBT_BYTES = 512L * 1024 * 1024;
 
     private record CacheKey(Path path, long modified, long size) {
     }
@@ -130,7 +139,7 @@ public final class SchematicStore {
 
     /** Stores raw schematic bytes (e.g. an upload) after validating them; returns the SHA-1 id. */
     public static String storeBytes(MinecraftServer server, byte[] bytes) throws IOException {
-        reader().read(new java.io.ByteArrayInputStream(bytes));
+        Schematic schematic = reader().read(new java.io.ByteArrayInputStream(bytes));
         String hash;
         try {
             hash = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-1").digest(bytes));
@@ -144,7 +153,28 @@ public final class SchematicStore {
             Files.write(tmp, bytes);
             Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
         }
+        // it was just read to check it: the job made from it next need not read the file again
+        CACHE.put(new CacheKey(target.toAbsolutePath().normalize(), Files.getLastModifiedTime(target).toMillis(), Files.size(target)), schematic);
         return hash;
+    }
+
+    /**
+     * Reads stored schematics on a background thread, so the first maid to need one finds it in the
+     * cache instead of reading the file during a server tick. Unreadable ones are left to
+     * {@link #loadStored} to report.
+     */
+    public static void preload(MinecraftServer server, java.util.Collection<String> hashes) {
+        Path dir = storeDir(server);
+        for (String hash : new java.util.HashSet<>(hashes)) {
+            if (!SHA1.matcher(hash).matches()) continue;
+            net.minecraft.Util.backgroundExecutor().execute(() -> {
+                try {
+                    load(dir.resolve(hash + EXTENSION));
+                } catch (IOException | RuntimeException e) {
+                    // reported when a job asks for it
+                }
+            });
+        }
     }
 
     public static boolean hasStored(MinecraftServer server, String hash) {
@@ -161,7 +191,8 @@ public final class SchematicStore {
     }
 
     private static SchematicReader reader() {
-        return new SchematicReader(MaidBuilderConfig.MAX_SCHEMATIC_VOLUME.get(), 512L * 1024 * 1024);
+        long volume = MaidBuilderConfig.MAX_SCHEMATIC_VOLUME.get();
+        return new SchematicReader(volume, Math.min(MAX_NBT_BYTES, BASE_NBT_BYTES + volume * NBT_BYTES_PER_BLOCK));
     }
 
     public static String sha1(Path file) throws IOException {

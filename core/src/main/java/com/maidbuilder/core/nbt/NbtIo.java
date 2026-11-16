@@ -18,6 +18,11 @@ import java.util.zip.GZIPOutputStream;
  */
 public final class NbtIo {
     private static final int MAX_DEPTH = 512;
+    /**
+     * Arrays are read this many bytes at a time, so memory is only taken for data that is really
+     * there: a file of a few bytes cannot make the reader allocate what its length field claims.
+     */
+    private static final int CHUNK_BYTES = 1 << 16;
 
     private final long maxBytes;
     private long budget;
@@ -76,6 +81,11 @@ public final class NbtIo {
         return len;
     }
 
+    /** The next size of an array that is full at {@code size} and will hold {@code len} in the end. */
+    private static int grown(int size, int len) {
+        return (int) Math.min(len, size * 2L);
+    }
+
     private Object readPayload(DataInput in, byte type, int depth) throws IOException {
         if (depth > MAX_DEPTH) throw new IOException("NBT nested too deeply");
         switch (type) {
@@ -86,8 +96,13 @@ public final class NbtIo {
             case NbtType.FLOAT: charge(4); return in.readFloat();
             case NbtType.DOUBLE: charge(8); return in.readDouble();
             case NbtType.BYTE_ARRAY: {
-                byte[] arr = new byte[readLength(in, 1)];
-                in.readFully(arr);
+                int len = readLength(in, 1);
+                byte[] arr = new byte[Math.min(len, CHUNK_BYTES)];
+                for (int done = 0; done < len; ) {
+                    if (done == arr.length) arr = java.util.Arrays.copyOf(arr, grown(done, len));
+                    in.readFully(arr, done, arr.length - done);
+                    done = arr.length;
+                }
                 return arr;
             }
             case NbtType.STRING: {
@@ -118,13 +133,21 @@ public final class NbtIo {
                 return compound;
             }
             case NbtType.INT_ARRAY: {
-                int[] arr = new int[readLength(in, 4)];
-                for (int i = 0; i < arr.length; i++) arr[i] = in.readInt();
+                int len = readLength(in, 4);
+                int[] arr = new int[Math.min(len, CHUNK_BYTES / 4)];
+                for (int i = 0; i < len; i++) {
+                    if (i == arr.length) arr = java.util.Arrays.copyOf(arr, grown(i, len));
+                    arr[i] = in.readInt();
+                }
                 return arr;
             }
             case NbtType.LONG_ARRAY: {
-                long[] arr = new long[readLength(in, 8)];
-                for (int i = 0; i < arr.length; i++) arr[i] = in.readLong();
+                int len = readLength(in, 8);
+                long[] arr = new long[Math.min(len, CHUNK_BYTES / 8)];
+                for (int i = 0; i < len; i++) {
+                    if (i == arr.length) arr = java.util.Arrays.copyOf(arr, grown(i, len));
+                    arr[i] = in.readLong();
+                }
                 return arr;
             }
             default:

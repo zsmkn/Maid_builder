@@ -4,6 +4,7 @@ import com.github.tartaricacid.touhoulittlemaid.entity.passive.EntityMaid;
 import com.google.common.collect.ImmutableMap;
 import com.maidbuilder.MaidBuilder;
 import com.maidbuilder.MaidBuilderConfig;
+import com.maidbuilder.common.BlockPlacer;
 import com.maidbuilder.common.MaterialContainers;
 import com.maidbuilder.common.job.BuildJob;
 import com.maidbuilder.common.job.BuildJobManager;
@@ -11,8 +12,6 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.sounds.SoundEvents;
-import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.behavior.Behavior;
@@ -20,7 +19,6 @@ import net.minecraft.world.entity.ai.behavior.BlockPosTracker;
 import net.minecraft.world.entity.ai.memory.MemoryModuleType;
 import net.minecraft.world.entity.ai.memory.WalkTarget;
 import net.minecraft.world.item.Items;
-import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.ScaffoldingBlock;
 import net.minecraft.world.phys.AABB;
@@ -67,6 +65,13 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
     private static final int COLUMN_BUSY_WAIT = 100;
     /** Ticks allowed per step of a walk along the scaffolding before she gives up on it. */
     private static final int STEP_TIMEOUT = 40;
+    /** Blocks ahead she should carry the materials for when she starts a climb. */
+    private static final int STOCK_UP_STEPS = 64;
+    private static final int STOCK_UP_INTERVAL = 20 * 30;
+    /** How long she waits for the fetch task to take over once she decided to stock up. */
+    private static final int STOCK_UP_WAIT = 100;
+    /** Blocks weighed against each other when she moves along the top of the scaffolding. */
+    private static final int MAX_SHIFT_CHOICES = 64;
 
     private final BuilderSession session;
     private final float speed;
@@ -81,6 +86,13 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
     private int walkIndex;
     private int stepTicks;
     private int stageTicks;
+    /** Just up a column, before anything was done from its top. */
+    private boolean nothingPlacedHere;
+    /** The block she set out to climb for, until something got done from up there; -1 otherwise. */
+    private int tripStep = -1;
+    /** Ticks in a row she stood at the right height but off the middle of the block she works from. */
+    private int offTopTicks;
+    private static final int OFF_TOP_GRACE = 20;
     private UUID maidId = new UUID(0, 0);
 
     public BuilderScaffoldTask(BuilderSession session, float speed) {
@@ -106,6 +118,8 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
         session.busy = true;
         maidId = maid.getUUID();
         stage = Stage.DONE;
+        tripStep = -1;
+        offTopTicks = 0;
         job = job(level, maid).orElse(null);
         if (job == null) return;
 
@@ -124,7 +138,19 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
         session.scaffoldStep = -1;
         if (index < 0 || job.isFinished() || job.claimOf(maid.getUUID()) != index || job.status(index) != BuildJob.PENDING) return;
         BlockPos target = job.pos(index);
-        ReachPlanner.Column column = ReachPlanner.planColumn(level, maid, job, target);
+        if (shouldStockUp(level, maid, gameTime)) {
+            MaidBuilder.LOGGER.debug("Maid {} stocks up before climbing to {}", maid.getUUID(), target);
+            session.topUp = true;
+            session.topUpUntil = gameTime + STOCK_UP_WAIT;
+            session.lastTopUp = gameTime;
+            return;
+        }
+        int have = MaidInventory.count(maid, Items.SCAFFOLDING);
+        ReachPlanner.Column column = ReachPlanner.planColumn(level, maid, job, target, have);
+        if (column == null && have < MaidBuilderConfig.MAX_SCAFFOLD_HEIGHT.get()) {
+            // perhaps only for want of scaffolding: see what a column would take, and get that
+            column = ReachPlanner.planColumn(level, maid, job, target, Integer.MAX_VALUE);
+        }
         if (column == null && ReachPlanner.otherColumnsInUse(job, maid)) {
             // maybe only the columns her teammates are on would do: let them build it
             session.defer(index, gameTime + COLUMN_BUSY_WAIT);
@@ -139,7 +165,6 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
             session.defer(index, gameTime + COLUMN_BUSY_WAIT);
             return;
         }
-        int have = MaidInventory.count(maid, Items.SCAFFOLDING);
         if (have < column.newBlocks()) {
             session.defer(index, gameTime + WAIT_FOR_SCAFFOLDING);
             if (containersHaveScaffolding(level, maid, job)) {
@@ -151,6 +176,7 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
         }
         base = column.base();
         standY = column.standY();
+        tripStep = index;
         MaidBuilder.LOGGER.debug("Maid {} puts up scaffolding at {} (stand y {}, {} new) to reach {}",
                 maid.getUUID(), base, standY, column.newBlocks(), target);
         if (maid.distanceToSqr(Vec3.atBottomCenterOf(base)) <= 2.0) {
@@ -229,11 +255,12 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
                 enter(Stage.DONE);
                 return;
             }
-            MaidInventory.consume(maid, List.of(new BuildJob.Requirement(Items.SCAFFOLDING, 1)));
-            level.setBlock(cell, ReachPlanner.scaffoldState(level, cell), Block.UPDATE_ALL);
-            job.addScaffold(cell);
-            maid.swing(InteractionHand.MAIN_HAND);
-            level.playSound(null, cell, SoundEvents.SCAFFOLDING_PLACE, SoundSource.BLOCKS, 1.0f, 0.8f);
+            if (!placeScaffold(level, maid, cell)) {
+                failClaimed(maid, gameTime);
+                // part of the column may stand already: from on it she has to come down again
+                if (ReachPlanner.columnAt(maid, job) != null) goDown(level, maid);
+                else enter(Stage.DONE);
+            }
             return;
         }
         enter(Stage.CLIMB);
@@ -247,6 +274,7 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
     private void climb(ServerLevel level, EntityMaid maid, long gameTime) {
         holdStill(maid);
         if (onTop(maid)) {
+            nothingPlacedHere = true;
             enter(Stage.WORK);
             return;
         }
@@ -273,31 +301,84 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
     /** On top: build what is in reach (the claimed block first), then come down. */
     private void work(ServerLevel level, EntityMaid maid, long gameTime) {
         holdStill(maid);
-        if (!onTop(maid) || stageTicks > WORK_TIMEOUT || job.isFinished()) {
+        if (stageTicks > WORK_TIMEOUT || job.isFinished()) {
             job.release(maid.getUUID());
             goDown(level, maid);
             return;
         }
+        if (!onTop(maid)) {
+            // Arriving along the scaffolding she may slide on to the edge of the block: step back to
+            // its middle rather than take that for having left it (and climb down for nothing).
+            if (maid.getY() >= standY - 0.05 && ++offTopTicks <= OFF_TOP_GRACE) {
+                Vec3 centre = Vec3.atBottomCenterOf(base.atY(standY));
+                maid.getMoveControl().setWantedPosition(centre.x, centre.y, centre.z, speed);
+                return;
+            }
+            job.release(maid.getUUID());
+            goDown(level, maid);
+            return;
+        }
+        offTopTicks = 0;
         if (stageTicks % WORK_INTERVAL != 0) return;
         UUID id = maid.getUUID();
         int index = job.claimOf(id);
-        if (index >= 0 && job.status(index) == BuildJob.PENDING && ReachPlanner.inReach(maid, job.pos(index))) {
-            if (!BuilderPlaceTask.workStep(level, maid, job, index, session, WORK_INTERVAL)) job.release(id);
-            return;
+        if (index >= 0 && job.status(index) == BuildJob.PENDING && !ReachPlanner.inReach(maid, job.pos(index))
+                && nothingPlacedHere && shiftToClaimed(level, maid, index)) {
+            return; // the column stands away from the block it was put up for: over to it first
         }
+        nothingPlacedHere = false;
+        if (index < 0 || job.status(index) != BuildJob.PENDING || !ReachPlanner.inReach(maid, job.pos(index))) {
+            index = claimNextInReach(level, maid, gameTime);
+            if (index < 0) return;
+        }
+        // the block picked just now is placed right away: one block per interval, as on the ground
+        if (!BuilderPlaceTask.workStep(level, maid, job, index, session, WORK_INTERVAL)) {
+            if (job.status(index) != BuildJob.PENDING) tripStep = -1; // the trip up was good for something
+            job.release(id);
+        }
+    }
+
+    /**
+     * Fresh on top of a column that was put up out of reach of the block she claimed (where it serves
+     * more blocks, see {@link ReachPlanner#planColumn}): walks along the top to that block, keeping the claim.
+     */
+    private boolean shiftToClaimed(ServerLevel level, EntityMaid maid, int index) {
+        nothingPlacedHere = false;
+        if (!MaidBuilderConfig.USE_SCAFFOLDING.get()) return false;
+        ReachPlanner.Walk w = ReachPlanner.planShift(level, maid, job, base.atY(standY), job.pos(index), MaidInventory.count(maid, Items.SCAFFOLDING));
+        if (w == null || !job.claimColumn(BuildJob.columnKey(w.end()), maid.getUUID())) {
+            // the way planned from the ground is gone: count it, so she does not come back up here for ever
+            job.recordAttempt(index, level.getGameTime(), BuildJob.Problem.UNREACHABLE);
+            return false;
+        }
+        MaidBuilder.LOGGER.debug("Maid {} walks {} along the scaffolding ({} new) from the column to the block it is for at {}",
+                maid.getUUID(), w.path().size(), w.newBlocks(), job.pos(index));
+        startWalk(w.path(), Stage.SHIFT);
+        return true;
+    }
+
+    /**
+     * Claims the next block within reach she has materials for and returns its step. With none left
+     * (-1) she has moved on already: raising the column, walking along the scaffolding, or going down.
+     */
+    private int claimNextInReach(ServerLevel level, EntityMaid maid, long gameTime) {
+        UUID id = maid.getUUID();
         job.release(id);
         Map<net.minecraft.world.item.Item, Integer> inventory = MaidInventory.count(maid);
         AABB self = maid.getBoundingBox();
+        long firstLayer = job.firstBuildLayer();
         int next = job.findNext(gameTime, i -> {
             BlockPos pos = job.pos(i);
             return ReachPlanner.inReach(maid, pos) && !self.intersects(new AABB(pos))
-                    && !pos.equals(base.atY(standY - 1)) && MaidInventory.has(inventory, job.requirements(i));
+                    && !pos.equals(base.atY(standY - 1)) && MaidInventory.has(inventory, job.requirements(i))
+                    && job.joinsBuilt(level, i, firstLayer);
         }, MaidBuilderConfig.MAX_SCAN_PER_SEARCH.get());
         if (next >= 0 && job.claim(next, id)) {
             maid.getBrain().setMemory(MemoryModuleType.LOOK_TARGET, new BlockPosTracker(job.pos(next)));
-        } else if (!raise(level, maid, gameTime) && !planShift(level, maid, gameTime)) {
-            goDown(level, maid);
+            return next;
         }
+        if (!raise(level, maid, gameTime) && !planShift(level, maid, gameTime)) goDown(level, maid);
+        return -1;
     }
 
     /**
@@ -330,10 +411,19 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
         if (!MaidBuilderConfig.USE_SCAFFOLDING.get()) return false;
         UUID id = maid.getUUID();
         BlockPos stand = base.atY(standY);
-        int next = BuilderFindTargetTask.pickNext(level, maid, job, session, gameTime, i -> job.pos(i).getY() >= standY - 1);
-        if (next < 0) return false;
-        ReachPlanner.Walk w = ReachPlanner.planShift(level, maid, job, stand, job.pos(next), MaidInventory.count(maid, Items.SCAFFOLDING));
-        if (w == null || !job.claimColumn(BuildJob.columnKey(w.end()), id) || !job.claim(next, id)) return false;
+        // every block of the layer in turn she could build, not only the nearest: the walk decides which
+        Map<BlockPos, Integer> choices = new java.util.LinkedHashMap<>();
+        int nearest = BuilderFindTargetTask.pickNext(level, maid, job, session, gameTime, i -> {
+            if (job.pos(i).getY() < standY - 1) return false;
+            if (choices.size() < MAX_SHIFT_CHOICES) choices.put(job.pos(i), i);
+            return true;
+        });
+        if (nearest < 0) return false;
+        choices.put(job.pos(nearest), nearest);
+        ReachPlanner.Walk w = ReachPlanner.planShift(level, maid, job, stand, List.copyOf(choices.keySet()), MaidInventory.count(maid, Items.SCAFFOLDING));
+        if (w == null) return false;
+        int next = choices.get(w.target());
+        if (!job.claimColumn(BuildJob.columnKey(w.end()), id) || !job.claim(next, id)) return false;
         MaidBuilder.LOGGER.debug("Maid {} walks {} along the scaffolding ({} new) from {} to reach {}",
                 id, w.path().size(), w.newBlocks(), stand, job.pos(next));
         startWalk(w.path(), Stage.SHIFT);
@@ -345,6 +435,44 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
         walkIndex = 0;
         stepTicks = 0;
         enter(next);
+    }
+
+    /**
+     * Puts one scaffold from her inventory into {@code cell}, as a block placed by her: protection
+     * mods get the usual placement event and may refuse (false; nothing is used up then).
+     */
+    private boolean placeScaffold(ServerLevel level, EntityMaid maid, BlockPos cell) {
+        BlockPlacer.Result result = BlockPlacer.placeAsEntity(level, cell, ReachPlanner.scaffoldState(level, cell), maid);
+        if (result != BlockPlacer.Result.PLACED) {
+            MaidBuilder.LOGGER.debug("Maid {} could not put scaffolding at {}: {}", maid.getUUID(), cell, result);
+            return false;
+        }
+        MaidInventory.consume(maid, List.of(new BuildJob.Requirement(Items.SCAFFOLDING, 1)));
+        job.addScaffold(cell);
+        maid.swing(InteractionHand.MAIN_HAND);
+        return true;
+    }
+
+    /**
+     * About to climb: coming down just for materials and putting the scaffolding to use again costs
+     * far more than a walk to the chest now. So if she carries less than the next
+     * {@link #STOCK_UP_STEPS} blocks take, has a free slot, and a container holds what is missing,
+     * she gets that first (not more often than every {@link #STOCK_UP_INTERVAL} ticks).
+     */
+    private boolean shouldStockUp(ServerLevel level, EntityMaid maid, long gameTime) {
+        if (session.lastTopUp != Long.MIN_VALUE && gameTime - session.lastTopUp < STOCK_UP_INTERVAL) return false;
+        IItemHandler inv = maid.getAvailableInv(false);
+        boolean room = false;
+        for (int slot = 0; slot < inv.getSlots() && !room; slot++) room = inv.getStackInSlot(slot).isEmpty();
+        if (!room) return false;
+        Map<net.minecraft.world.item.Item, Integer> missing = job.shoppingList(MaidInventory.count(maid), STOCK_UP_STEPS, gameTime);
+        if (missing.isEmpty()) return false;
+        double range = MaidBuilderConfig.MATERIAL_SOURCE_RANGE.get();
+        for (Map.Entry<BlockPos, IItemHandler> e : MaterialContainers.distinct(level, job.allMaterialSources(level.getServer())).entrySet()) {
+            if (maid.distanceToSqr(Vec3.atCenterOf(e.getKey())) > range * range) continue;
+            if (MaterialContainers.containsAny(e.getValue(), missing)) return true;
+        }
+        return false;
     }
 
     /** Walks the planned way, hanging a scaffold under each step that has none yet; then works from its end. */
@@ -365,11 +493,10 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
                 goDown(level, maid);
                 return;
             }
-            MaidInventory.consume(maid, List.of(new BuildJob.Requirement(Items.SCAFFOLDING, 1)));
-            level.setBlock(cell, ReachPlanner.scaffoldState(level, cell), Block.UPDATE_ALL);
-            job.addScaffold(cell);
-            maid.swing(InteractionHand.MAIN_HAND);
-            level.playSound(null, cell, SoundEvents.SCAFFOLDING_PLACE, SoundSource.BLOCKS, 1.0f, 0.8f);
+            if (!placeScaffold(level, maid, cell)) {
+                failClaimed(maid, gameTime);
+                goDown(level, maid);
+            }
             return;
         }
         if (stepAlong(maid)) {
@@ -420,6 +547,15 @@ public class BuilderScaffoldTask extends Behavior<EntityMaid> {
 
     /** Down from where she is: on hanging scaffolding she first walks back to a column on the ground. */
     private void goDown(ServerLevel level, EntityMaid maid) {
+        offTopTicks = 0;
+        if (tripStep >= 0 && tripStep < job.size() && job.status(tripStep) == BuildJob.PENDING) {
+            // Up and down again without a single block done: count it against the block she went up
+            // for, so that it cools down (and is in the end left to the player) instead of sending
+            // her up the same column over and over.
+            MaidBuilder.LOGGER.debug("Maid {} comes down from {} with nothing done", maid.getUUID(), base);
+            job.recordAttempt(tripStep, level.getGameTime(), BuildJob.Problem.UNREACHABLE);
+        }
+        tripStep = -1;
         if (!ReachPlanner.grounded(level, base)) {
             List<BlockPos> back = ReachPlanner.planReturn(level, job, maid.blockPosition());
             if (back != null && !back.isEmpty()) {

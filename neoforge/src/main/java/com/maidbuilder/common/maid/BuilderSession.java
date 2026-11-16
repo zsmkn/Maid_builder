@@ -9,6 +9,14 @@ final class BuilderSession {
     int scaffoldStep = -1;
     /** Scaffolding the maid should fetch from a material container before trying again. */
     int scaffoldingWanted;
+    /**
+     * Set by the scaffold task when she should stock up before climbing; the fetch task takes it from
+     * there. Until {@link #topUpUntil} she picks no new block, so the fetch task gets its turn.
+     */
+    boolean topUp;
+    long topUpUntil;
+    /** Game time she last stocked up before a climb. */
+    long lastTopUp = Long.MIN_VALUE;
     /** Game time of the last "please give me scaffolding" message to the owner. */
     long lastNotify = Long.MIN_VALUE;
     /** Earliest game time of her next placement. */

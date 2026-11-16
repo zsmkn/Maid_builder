@@ -185,8 +185,9 @@ public final class BuildJob {
         int[] problemPairs = new int[problems.size() * 2];
         int n = 0;
         for (Map.Entry<Integer, Problem> e : problems.entrySet()) {
-            if (status == null || status[e.getKey()] != NEEDS_PLAYER) continue;
-            problemPairs[n++] = e.getKey();
+            int index = e.getKey();
+            if (status == null || index < 0 || index >= status.length || status[index] != NEEDS_PLAYER) continue;
+            problemPairs[n++] = index;
             problemPairs[n++] = e.getValue().ordinal();
         }
         if (n > 0) tag.putIntArray("Problems", java.util.Arrays.copyOf(problemPairs, n));
@@ -267,6 +268,7 @@ public final class BuildJob {
         if (status == null || status.length != n) {
             status = new byte[n];
         }
+        problems.keySet().removeIf(i -> i < 0 || i >= n); // e.g. a save from before the plan changed
         for (int i = 0; i < n; i++) {
             if (status[i] == PENDING && built.steps().get(i).phase() != BuildPhase.CLEAR
                     && (resolved[i].isAir() || reqs.get(i).isEmpty())) status[i] = FAILED;
@@ -279,6 +281,7 @@ public final class BuildJob {
         this.max = hi == null ? origin : hi;
         this.plan = built;
         this.cursor = 0;
+        this.counts = null;
     }
 
     // ---- clearing ----
@@ -319,6 +322,12 @@ public final class BuildJob {
         for (int i = 0; i < status.length; i++) {
             if (!isClearStep(i)) progress.put(pos(i).asLong(), status[i]);
         }
+        // the reasons are kept by step index, which the rebuilt plan numbers differently
+        Map<Long, Problem> reasons = new HashMap<>();
+        for (Map.Entry<Integer, Problem> e : problems.entrySet()) {
+            int i = e.getKey();
+            if (i >= 0 && i < status.length && !isClearStep(i)) reasons.put(pos(i).asLong(), e.getValue());
+        }
         clearMode = mode;
         clearRadius = radius;
         if (airClearRadius() != oldRadius) {
@@ -329,11 +338,16 @@ public final class BuildJob {
             attempts.clear();
             waits.clear();
             retryAfter.clear();
+            problems.clear();
             ensureLoaded(server);
             for (int i = 0; i < status.length; i++) {
-                Byte old = isClearStep(i) ? null : progress.get(pos(i).asLong());
+                if (isClearStep(i)) continue;
+                Byte old = progress.get(pos(i).asLong());
                 if (old != null) status[i] = old;
+                Problem reason = reasons.get(pos(i).asLong());
+                if (reason != null && status[i] == NEEDS_PLAYER) problems.put(i, reason);
             }
+            counts = null;
         }
         dirtyListener.run();
     }
@@ -444,11 +458,23 @@ public final class BuildJob {
     }
 
     public int count(byte state) {
-        if (status == null) return 0;
-        int c = 0;
-        for (byte b : status) if (b == state) c++;
-        return c;
+        if (status == null || state < 0 || state >= STATES) return 0;
+        if (counts == null) {
+            int[] c = new int[STATES];
+            for (byte b : status) if (b >= 0 && b < STATES) c[b]++;
+            counts = c;
+        }
+        return counts[state];
     }
+
+    /** Number of step states ({@link #PENDING} .. {@link #NEEDS_PLAYER}). */
+    private static final int STATES = 4;
+    /**
+     * Steps per state, kept up to date by {@link #setStatus} (maids ask whether the job is finished
+     * every tick); null after the status array was written some other way, to be counted afresh.
+     */
+    @Nullable
+    private int[] counts;
 
     public boolean isComplete() {
         return status != null && count(PENDING) == 0;
@@ -652,6 +678,38 @@ public final class BuildJob {
         return ((long) step.phase().ordinal() << 32) | (step.worldPos().y() & 0xFFFFFFFFL);
     }
 
+    /** No layer: the value {@link #firstBuildLayer} gives when nothing is left to build. */
+    public static final long NO_LAYER = Long.MIN_VALUE;
+
+    /** The layer (build phase and height) of the first block still to be placed; {@link #NO_LAYER} if none. */
+    public long firstBuildLayer() {
+        if (plan == null) return NO_LAYER;
+        while (cursor < status.length && status[cursor] != PENDING) cursor++;
+        for (int i = cursor; i < status.length; i++) {
+            if (status[i] == PENDING && !isClearStep(i)) return layerOf(i);
+        }
+        return NO_LAYER;
+    }
+
+    /**
+     * Whether the step may be built now without leaving a block hanging in the air. A maid who lacks
+     * the materials of the layer in turn goes on with a later one she has materials for; that is fine
+     * for blocks that join what stands already, but not for ones with nothing around them (a crafting
+     * table placed where the upper floor will be). Those wait until their own layer is the one in
+     * turn ({@code firstLayer}, from {@link #firstBuildLayer}); she fetches materials meanwhile.
+     */
+    public boolean joinsBuilt(net.minecraft.world.level.BlockGetter level, int index, long firstLayer) {
+        if (isClearStep(index) || layerOf(index) == firstLayer) return true;
+        BlockPos pos = pos(index);
+        BlockPos.MutableBlockPos beside = new BlockPos.MutableBlockPos();
+        for (net.minecraft.core.Direction dir : net.minecraft.core.Direction.values()) {
+            beside.setWithOffset(pos, dir);
+            // scaffolding is taken down again, so it holds nothing up
+            if (!level.getBlockState(beside).canBeReplaced() && !scaffolds.contains(beside)) return true;
+        }
+        return false;
+    }
+
     /** Positions other maids have claimed (to keep maids from crowding one spot). */
     public List<BlockPos> claimedByOthers(UUID maid) {
         List<BlockPos> list = new ArrayList<>(claims.size());
@@ -760,18 +818,37 @@ public final class BuildJob {
     }
 
     public void addScaffold(BlockPos pos) {
-        if (scaffolds.add(pos.immutable())) dirtyListener.run();
+        if (scaffolds.add(pos.immutable())) {
+            columns = null;
+            dirtyListener.run();
+        }
     }
 
     public void removeScaffold(BlockPos pos) {
-        if (scaffolds.remove(pos)) dirtyListener.run();
+        if (scaffolds.remove(pos)) {
+            columns = null;
+            dirtyListener.run();
+        }
     }
 
-    /** Tracked scaffolding grouped into columns by x/z, each sorted bottom to top. */
+    /** {@link #scaffoldColumns} as last computed; null once the scaffolding changed. */
+    @Nullable
+    private Map<Long, List<BlockPos>> columns;
+
+    /**
+     * Tracked scaffolding grouped into columns by x/z, each sorted bottom to top. A snapshot: it
+     * (and its lists) stays as it is when scaffolding is added or removed afterwards.
+     */
     public Map<Long, List<BlockPos>> scaffoldColumns() {
-        Map<Long, List<BlockPos>> columns = new TreeMap<>();
-        for (BlockPos pos : scaffolds) columns.computeIfAbsent(columnKey(pos), k -> new ArrayList<>()).add(pos);
-        for (List<BlockPos> column : columns.values()) column.sort(java.util.Comparator.comparingInt(BlockPos::getY));
+        if (columns == null) {
+            Map<Long, List<BlockPos>> grouped = new TreeMap<>();
+            for (BlockPos pos : scaffolds) grouped.computeIfAbsent(columnKey(pos), k -> new ArrayList<>()).add(pos);
+            grouped.replaceAll((key, column) -> {
+                column.sort(java.util.Comparator.comparingInt(BlockPos::getY));
+                return java.util.Collections.unmodifiableList(column);
+            });
+            columns = java.util.Collections.unmodifiableMap(grouped);
+        }
         return columns;
     }
 
@@ -818,6 +895,12 @@ public final class BuildJob {
     public void setStatus(int index, byte value) {
         if (status[index] != value) {
             MaidBuilder.LOGGER.debug("Job {} step {} {} at {}: {} -> {}", shortId(), index, targets[index], pos(index), status[index], value);
+            if (counts != null && value >= 0 && value < STATES && status[index] >= 0 && status[index] < STATES) {
+                counts[status[index]]--;
+                counts[value]++;
+            } else {
+                counts = null;
+            }
             status[index] = value;
             if (value != NEEDS_PLAYER) problems.remove(index);
             attempts.remove(index);
@@ -870,6 +953,7 @@ public final class BuildJob {
         for (int i = 0; i < status.length; i++) {
             if (status[i] == NEEDS_PLAYER) {
                 status[i] = PENDING;
+                counts = null;
                 n++;
             }
         }
@@ -888,6 +972,7 @@ public final class BuildJob {
         for (int i = 0; i < status.length; i++) {
             if (status[i] == NEEDS_PLAYER) {
                 status[i] = FAILED;
+                counts = null;
                 n++;
             }
         }

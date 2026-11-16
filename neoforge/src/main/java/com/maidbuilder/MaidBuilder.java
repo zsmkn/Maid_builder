@@ -33,6 +33,7 @@ public final class MaidBuilder {
 
         NeoForge.EVENT_BUS.addListener((RegisterCommandsEvent e) -> MaidBuilderCommand.register(e.getDispatcher(), e.getBuildContext()));
         NeoForge.EVENT_BUS.addListener((ServerStoppedEvent e) -> BuildJobManager.clearRuntimeCaches());
+        NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.event.server.ServerStartedEvent e) -> BuildJobManager.preload(e.getServer()));
         NeoForge.EVENT_BUS.addListener((AddReloadListenerEvent e) -> {
             e.addListener(new TerritoryLevels());
             e.addListener(new TemplateRegistry());

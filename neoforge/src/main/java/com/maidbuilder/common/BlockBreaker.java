@@ -79,6 +79,19 @@ public final class BlockBreaker {
     }
 
     /**
+     * Asks protection mods whether {@code breaker} may break the block, with the same events as
+     * {@link #breakAsEntity}; for blocks the caller removes itself (scaffolding the maids put up).
+     */
+    public static boolean mayBreak(ServerLevel level, BlockPos pos, LivingEntity breaker, UUID owner) {
+        BlockState state = level.getBlockState(pos);
+        if (!state.getBlock().canEntityDestroy(state, level, pos, breaker) || !EventHooks.onEntityDestroyBlock(breaker, pos, state)) {
+            return false;
+        }
+        var player = FakePlayerFactory.get(level, new GameProfile(owner, FAKE_PLAYER_NAME));
+        return !NeoForge.EVENT_BUS.post(new BlockEvent.BreakEvent(level, pos, state, player)).isCanceled();
+    }
+
+    /**
      * Breaks the block like a player would, firing both the living-entity and the player break
      * events (the latter through a fake player carrying the owner's id, which is what most protection
      * mods check). Drops are computed with {@code tool} and handed to {@code drops}.
@@ -87,11 +100,7 @@ public final class BlockBreaker {
                                        Consumer<ItemStack> drops) {
         BlockState state = level.getBlockState(pos);
         if (!breakable(level, pos, state)) return Result.PROTECTED;
-        if (!state.getBlock().canEntityDestroy(state, level, pos, breaker) || !EventHooks.onEntityDestroyBlock(breaker, pos, state)) {
-            return Result.DENIED;
-        }
-        var player = FakePlayerFactory.get(level, new GameProfile(owner, FAKE_PLAYER_NAME));
-        if (NeoForge.EVENT_BUS.post(new BlockEvent.BreakEvent(level, pos, state, player)).isCanceled()) return Result.DENIED;
+        if (!mayBreak(level, pos, breaker, owner)) return Result.DENIED;
 
         List<ItemStack> loot = Block.getDrops(state, level, pos, null, breaker, tool);
         level.levelEvent(LevelEvent.PARTICLES_DESTROY_BLOCK, pos, Block.getId(state));

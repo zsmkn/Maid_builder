@@ -48,6 +48,7 @@ public class BuilderFindTargetTask extends MaidCheckRateTask {
     protected boolean checkExtraStartConditions(ServerLevel level, EntityMaid maid) {
         // Paths are only computed for mobs standing on something (or swimming): searching mid-jump
         // would find no way to any block and count failed tries.
+        if (session.topUp && level.getGameTime() < session.topUpUntil) return false; // off to stock up first
         return BuilderMaidData.jobOf(maid) != null && session.idle() && (maid.onGround() || maid.isInWater())
                 && super.checkExtraStartConditions(level, maid);
     }
@@ -114,6 +115,7 @@ public class BuilderFindTargetTask extends MaidCheckRateTask {
         AABB self = maid.getBoundingBox();
         BlockPos footing = maid.getOnPos();
         job.sweepClear(level, CLEAR_SWEEP);
+        long firstLayer = job.firstBuildLayer();
         return job.findBest(level.getGameTime(), i -> {
             BlockPos pos = job.pos(i);
             if (!level.isLoaded(pos)) return false;
@@ -132,7 +134,7 @@ public class BuilderFindTargetTask extends MaidCheckRateTask {
             }
             if (!homeMode && (owner == null || !pos.closerToCenterThan(owner.position(), ownerRange))) return false;
             if (self.intersects(new AABB(pos)) || job.isScaffold(pos) || session.isDeferred(i, gameTime)) return false;
-            return MaidInventory.has(inventory, job.requirements(i)) && also.test(i);
+            return MaidInventory.has(inventory, job.requirements(i)) && job.joinsBuilt(level, i, firstLayer) && also.test(i);
         }, i -> score(maid, job.pos(i), others), MaidBuilderConfig.MAX_SCAN_PER_SEARCH.get());
     }
 
